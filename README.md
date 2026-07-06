@@ -4,6 +4,8 @@
 
 A Python-based signal scanner that detects intermarket divergence between ES and NQ futures — identifying liquidity sweeps where one instrument fails to confirm the other's swing extreme, with Fair Value Gap entry confluence and session open bias filtering.
 
+NOTE: Go to Branch 8.1 to see recent version updates to the scanner. The main branch is for whole version updates.
+
 ---
 
 ## What It Does
