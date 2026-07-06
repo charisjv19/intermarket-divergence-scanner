@@ -1,5 +1,4 @@
-[README.md](https://github.com/user-attachments/files/29714213/README.md)
-
+[README.md](https://github.com/user-attachments/files/29714415/README.md)
 
 # ES/NQ Intermarket Divergence Scanner
 
@@ -13,6 +12,9 @@ This is an active research project. The scanner is built iteratively — each ve
 
 ```
 ├── scanners/                      # Scanner versions (Python)
+│   ├── smt_scanner_v8_2.py        # FVG selection + staleness improvements
+│   ├── smt_scanner_v8_3.py        # 15m macro bias engine
+│   ├── smt_scanner_v8_4.py        # 5m SMT confluence layer
 │   ├── smt_scanner_v8_5.py        # Walk-back wick-break algorithm
 │   ├── smt_scanner_v8_6.py        # Multi-sw2 + parallel sw1 detection
 │   └── smt_scanner_v8_7.py        # Dedup fix + FVG search correction (current)
@@ -64,11 +66,42 @@ The scanner operates across three timeframes:
 
 ---
 
-## How It Works (v8.5–v8.7 Algorithm)
+## How It Works
 
-### SMT Detection: Walk-Back with Parallel Structural Validation
+### v8.2 — FVG Selection + Staleness
 
-Unlike simple "compare last two swings" approaches, the scanner uses a multi-candidate walk-back algorithm:
+v8.2 addressed two problems identified during manual review: the scanner was sometimes picking a later FVG when an earlier valid one existed, and sw1 could be arbitrarily far from sw2 in time, producing structurally meaningless comparisons.
+
+- **Earliest valid FVG**: Instead of returning the first FVG found in the lookahead scan, the scanner now evaluates all candidates and selects the one closest to the SMT confirmation point
+- **sw1 staleness limit**: sw1 must be within 60 minutes of sw2 on the 1m chart — prevents comparing structural points across sessions or extended ranging periods
+- **SMT_IN_FVG dedup priority**: When both entry types exist for the same divergence, SMT_IN_FVG (market entry) takes precedence over FVG_AFTER_SMT (limit entry)
+
+### v8.3 — 15m Macro Bias Engine
+
+v8.3 replaced the session open midpoint filter (a blunt directional check) with a structural bias classifier operating on 15-minute data. This was the first multi-timeframe integration.
+
+- **Swing sequence analysis**: Resamples 1m data to 15m, runs 4-bar swing detection, classifies higher highs/higher lows as bullish, lower highs/lower lows as bearish
+- **Momentum classification**: Compares consecutive impulse leg sizes. If the current leg is ≥80% of the previous, momentum is "strong"; below 80% is "slowing". Recovery above 80% on the next leg resets to strong
+- **Per-signal evaluation**: Bias evolves through the session as new 15m bars close, so a morning signal can have a different bias than an afternoon signal
+- **Combined bias**: Requires both ES and NQ to agree directionally. One bullish + one bearish = conflicted (signal blocked)
+- **States**: BULLISH, BULLISH (SLOWING), BEARISH, BEARISH (SLOWING), TRANSITIONAL, CONFLICTED
+
+### v8.4 — 5m SMT Confluence Layer
+
+v8.4 added a second timeframe confirmation: does a 5m structural divergence exist in the same direction as the 1m signal?
+
+- **5m swing detection**: Runs the same 4-bar swing logic on 5m resampled data within a 36-bar (3-hour) lookback window
+- **Confluence check**: Each 1m signal is evaluated against the 5m SMT state at the time of the signal
+- **Two modes tested**: Strict mode (require agreeing 5m SMT) reduced signals to 6 total — too aggressive. Lenient mode (only block on opposing 5m SMT) preserved signal volume while filtering contradictory setups
+- **Output**: `smt5m_status` column — agree, oppose, conflicted, or none
+
+### v8.5 — Walk-Back Wick-Break Algorithm (Complete SMT Rewrite)
+
+v8.5 replaced the "compare last 2 swings" approach with a fundamentally different algorithm that matches how discretionary traders actually read SMT on a chart.
+
+**Core change**: Instead of asking "did the last two swings diverge?", v8.5 asks "did any recent swing break prior structure while the other instrument failed to break its corresponding structure?"
+
+The walk-back algorithm:
 
 1. **Consider the last 5 confirmed swings** on each instrument as potential sw2 anchors (newest first)
 2. **For each sw2 candidate**, find the parallel sw2 on the other instrument at the same timestamp
@@ -78,6 +111,31 @@ Unlike simple "compare last two swings" approaches, the scanner uses a multi-can
 6. **Fire the signal** if at least one structural reference has a "failed parallel"
 
 This approach catches divergences that occur several swings back from the current price action — matching how discretionary traders actually read SMT on a chart.
+
+Additional v8.5 changes:
+- **Wick break** replaces body break — `sw2_high > sw1_high` (not close > high)
+- **sw2 staleness**: 120 minutes on 1m chart, 36 bars on 5m chart
+- **Same-day session boundary**: sw1 must be from the same calendar date as the signal
+
+### v8.6 — Multi-sw2 Candidates + Parallel sw1
+
+v8.6 addressed two limitations of v8.5: it only considered the single most recent swing as sw2, and sw1 on the failing instrument wasn't time-aligned with sw1 on the confirming instrument.
+
+- **Multi-sw2 candidates**: Last 5 confirmed swings considered as potential sw2 anchors (newest first). This catches structural breaks that happened a few swings back, not just the absolute latest
+- **Parallel sw1 lookup**: sw1 on the failing instrument is now found by matching timestamps with sw1 on the confirming instrument (±2 minute tolerance). Previously used "most recent prior swing" which didn't match the parallel structural comparison a trader actually makes
+- **All broken sw1s evaluated**: When sw2 breaks multiple prior structures, the scanner checks all of them. Signal fires if at least one has a "failed parallel"
+- **Primary sw1 = oldest failed parallel**: Reports the most structurally significant divergence
+- **`confirmations_count`**: Tracks how many structural breaks confirm the divergence. Values of 3+ indicate particularly strong setups
+- **`alt_sw1_times`**: Lists additional confirmed sw1 timestamps when confirmations_count > 1
+- **Performance caching**: Macro bias cached per 15-min bucket, 5m SMT cached per 5-min bucket — reduced processing from ~60s to ~19s per file
+
+### v8.7 — Dedup + FVG Search Correction
+
+v8.7 fixed two bugs discovered during manual review of Feb 25, 2026 signals:
+
+- **Dedup by sw2 identity**: Previously deduped by 30-minute time bucket, which allowed the same SMT (identical sw1/sw2 pair) to generate multiple signals across bucket boundaries. Now deduplicates by `sw2_conf_time` — each unique SMT fires exactly once
+- **FVG search starts from sw2 confirmation bar**: Previously searched from the signal bar (delayed by caching/bucketing), missing FVGs that formed between sw2 confirmation and signal firing. Now starts immediately after sw2
+- **ES_FVG_MIN lowered to 0.5pt**: A 0.5pt FVG on Feb 25 would have been a 3R winner. Under review for potential overfit; may revert for out-of-sample testing
 
 ### Confirmations Count
 
@@ -109,6 +167,9 @@ The scanner was built iteratively. Each version reflects a specific refinement b
 | v7 | Individual swing thresholds removed after chart review showed valid divergences being filtered |
 | v8 | Two-layer macro filter (session open bias); eliminated ~50% of noise signals |
 | v8.1 | Session open bias refined; SMT_IN_FVG entry type added |
+| **v8.2** | **FVG selection picks earliest valid; sw1 staleness limit (60 min)** |
+| **v8.3** | **15m macro bias engine replaces session open midpoint filter** |
+| **v8.4** | **5m SMT confluence layer (lenient mode: blocks only on opposing 5m SMT)** |
 | **v8.5** | **Complete SMT rewrite: walk-back wick-break algorithm with 20-swing lookback** |
 | **v8.6** | **Multi-sw2 candidates (last 5 swings); parallel sw1 timestamp matching; confirmations_count** |
 | **v8.7** | **Dedup by sw2 identity (not 30-min bucket); FVG search from sw2 confirmation bar; ES_FVG_MIN lowered to 0.5pt** |
