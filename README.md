@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/29714415/README.md)
+
 
 # ES/NQ Intermarket Divergence Scanner
 
