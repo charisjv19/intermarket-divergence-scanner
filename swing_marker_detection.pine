@@ -1,0 +1,20 @@
+//@version=6
+indicator("Swing High/Low Marker", overlay=true)
+
+// 4-bar swing detection pattern
+// Swing is AT bar[1], CONFIRMED when bar[0] closes
+// This creates a 1-bar lag: the swing exists at bar[1] but
+// you don't know it until bar[0] prints.
+//
+// This is the same logic used in:
+//   - The Python scanner (5m and 15m internal swing detection)
+//   - The macro bias diagnostic tool
+//   - The TradingView CSV exports with Swing High/Low columns
+
+isSwingHigh = high[1] > high[2] and high[1] > high[3] and high[1] > high[0]
+isSwingLow  = low[1]  < low[2]  and low[1]  < low[3]  and low[1]  < low[0]
+
+plotshape(isSwingHigh, title="Swing High", location=location.abovebar,
+          color=color.red, style=shape.triangledown, size=size.tiny, offset=-1)
+plotshape(isSwingLow, title="Swing Low", location=location.belowbar,
+          color=color.green, style=shape.triangleup, size=size.tiny, offset=-1)
