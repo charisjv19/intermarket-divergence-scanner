@@ -1,0 +1,138 @@
+# Changelog
+
+All notable changes to the Intermarket Divergence Scanner.
+
+Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced a fundamentally different detection algorithm. Changes within the v8.x series are cumulative.
+
+---
+
+## v8.7 (June 2026)
+
+**Bug fixes identified through manual blind review of Feb 25 signals.**
+
+### Fixed
+- **Dedup by sw2 identity** — Previously deduped by 30-minute time bucket, which allowed the same SMT (identical sw1/sw2 pair) to generate multiple signals across bucket boundaries. Now deduplicates by `sw2_conf_time`, so each unique SMT fires exactly once.
+- **FVG search starts from sw2 confirmation** — Previously searched for FVGs starting from the signal bar (which could be delayed by caching/bucketing). Now starts from the bar after sw2 confirmation, catching FVGs that form immediately after the structural break.
+
+### Changed
+- `ES_FVG_MIN` lowered from 1.0pt to 0.5pt — a 0.5pt FVG on Feb 25 would have been a 3R winner. Under review for potential overfit; may revert for out-of-sample testing.
+
+---
+
+## v8.6 (June 2026)
+
+**Multi-sw2 candidate evaluation and parallel sw1 detection.**
+
+### Added
+- **Multi-sw2 candidates** — Last 5 confirmed swings considered as potential sw2 anchors (newest first), not just the single most recent swing. This catches SMTs where the structural break happened a few swings back.
+- **Parallel sw1 lookup** — sw1 on the failing instrument is now found by timestamp-matching with sw1 on the confirming instrument (within 2-minute tolerance). Previously reported "most recent prior swing" which didn't match the parallel structural comparison a discretionary trader actually makes.
+- **`confirmations_count` column** — Tracks how many prior structural references sw2 broke that the other instrument failed to break. Higher counts indicate stronger divergence.
+- **`alt_sw1_times` column** — Lists additional confirmed sw1 timestamps when confirmations_count > 1.
+- **sw1 ≠ sw2 guard** — The failing instrument's parallel sw1 must be a different swing than its sw2 (prevents edge case where both resolve to the same point).
+
+### Performance
+- Added caching for macro bias (per 15-min bucket) and 5m SMT confluence (per 5-min bucket) to reduce computation from ~60s to ~19s per file.
+
+---
+
+## v8.5 (June 2026)
+
+**Complete rewrite of SMT detection logic.**
+
+### Changed
+- **Walk-back algorithm** replaces "compare last 2 swings":
+  - sw2 = most recent confirmed swing on each instrument
+  - Walk back through up to 20 prior swings (same day) to find sw1 that sw2 wick-broke
+  - SMT exists when one instrument confirms (broke structure) and the other fails
+- **Wick break** replaces body break for structural comparison — `sw2_high > sw1_high` (or inverse for lows)
+- **sw2 staleness**: 120 minutes on 1m chart, 36 bars on 5m chart
+- **Same-day session boundary** — sw1 must be from the same calendar date as the signal
+- **Removed structural pullback check** — no longer meaningful with multi-swing lookback; staleness window handles recency
+
+### Added
+- **15m macro bias engine** (from v8.3) — 3-timeframe structural bias classification
+  - Sequence analysis: HH+HL = bullish, LH+LL = bearish
+  - Momentum classification: ≥80% of previous impulse leg = strong, <80% = slowing
+  - Combined bias requires ES and NQ agreement
+- **5m SMT confluence layer** (from v8.4) — lenient mode blocks only on opposing 5m SMT
+- **`find_failing_sw1` function** — Reports the actual structural reference point on the failing instrument (not a duplicate of sw2)
+
+---
+
+## v8.4 (June 2026)
+
+**5m SMT confluence layer.**
+
+### Added
+- 5m SMT confluence check — each 1m signal is evaluated against 5m structural divergence in the same lookback window
+- Two modes: **strict** (requires agreeing 5m SMT) and **lenient** (only blocks on opposing 5m SMT)
+- Lenient mode selected as default after strict mode reduced signals to 6 total (too aggressive)
+- Output adds `smt5m_status` column: agree / oppose / conflicted / none
+
+---
+
+## v8.3 (June 2026)
+
+**15m macro bias engine replaces session open midpoint filter.**
+
+### Changed
+- Replaced session open midpoint macro filter with 15m structural bias engine
+- Bias classification uses swing sequence (HH+HL = bullish, LH+LL = bearish) plus momentum assessment (impulse leg comparison at 80% threshold)
+- Per-signal bias evaluation — bias evolves through the session as new 15m bars close
+- Combined bias requires ES and NQ directional agreement
+- States: BULLISH, BULLISH (SLOWING), BEARISH, BEARISH (SLOWING), TRANSITIONAL, CONFLICTED
+
+---
+
+## v8.2 (June 2026)
+
+**FVG selection and staleness improvements.**
+
+### Changed
+- FVG selection picks the **earliest valid** FVG after the SMT (not the first one found in the lookahead scan)
+- sw1 staleness limit: sw1 must be within 60 minutes of sw2 on the 1m chart
+- `SMT_IN_FVG` entry takes priority over `FVG_AFTER_SMT` during deduplication when both exist for the same divergence
+
+---
+
+## v8.1 (May 2026)
+
+- Session open bias filter refined to single macro layer
+- `SMT_IN_FVG` entry type added — divergence occurring inside a pre-existing Fair Value Gap triggers market entry rather than waiting for a new FVG
+
+## v8 (May 2026)
+
+- Two-layer macro filter using session open bias relative to prior session range
+- Eliminated approximately 50% of noise signals firing against the macro direction
+
+## v7 (April 2026)
+
+- Individual structural swing thresholds removed — chart review showed valid divergences being incorrectly filtered, including two missed 3R trades
+- Structural qualification consolidated into the pair-level pullback filter
+
+## v6 (April 2026)
+
+- NY Afternoon session extended to start at 13:00 ET
+- Pre-session swing lookback added (30 minutes before each session opens)
+
+## v5 (March 2026)
+
+- FVG location anchor changed from bar close price to swept extreme price
+- Equal high/low SMT variant added (one instrument holds flat while the other diverges)
+
+## v4 (March 2026)
+
+- Structural pullback validation added between swing pairs (ES ≥ 2.0pt, NQ ≥ 8.0pt)
+- Prevents false signals from minor price fluctuations
+
+## v3 (February 2026)
+
+- Improved swing matching logic
+- Session window enforcement
+
+## v2 (February 2026)
+
+- Initial build
+- Basic divergence detection with swing timestamp alignment
+- FVG lookahead window for entry identification
+- CSV output with signal metadata
