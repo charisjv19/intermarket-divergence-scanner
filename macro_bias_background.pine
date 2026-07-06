@@ -1,0 +1,164 @@
+//@version=6
+indicator("SMT Macro Bias Background", overlay=true, max_bars_back=500)
+
+// ── SETTINGS ─────────────────────────────────────────────────────────────────
+bgOpacity       = input.int(88, "Background Opacity (0=solid, 100=invisible)", minval=0, maxval=100)
+slowThreshold   = input.float(0.80, "Slowing Threshold (default 0.80 = 80%)", minval=0.1, maxval=1.0, step=0.01)
+minLegs         = input.int(3, "Min Legs for Momentum Assessment", minval=2, maxval=6)
+lookbackBars15m = input.int(144, "15m Lookback Bars (144 = 36 hours)", minval=20, maxval=500)
+
+// ── COLORS ───────────────────────────────────────────────────────────────────
+colorStrongBull  = color.new(color.green,  bgOpacity)
+colorBullSlowing = color.new(#90EE90,      bgOpacity)   // light green
+colorStrongBear  = color.new(color.red,    bgOpacity)
+colorBearSlowing = color.new(#FFB3B3,      bgOpacity)   // light red
+colorTransitory  = color.new(color.yellow, bgOpacity)
+colorNone        = color.new(color.white,  100)         // fully transparent
+
+// ── PULL 15M DATA ────────────────────────────────────────────────────────────
+// All logic runs on 15m closes — confirmed bars only (barmerge.lookahead_off)
+[h15, l15] = request.security(syminfo.tickerid, "15", [high, low], lookahead=barmerge.lookahead_off)
+
+// ── SWING DETECTION ON 15M ───────────────────────────────────────────────────
+// Mirrors your swing marker logic exactly:
+// isSwingHigh = high[1] > high[2] and high[1] > high[3] and high[1] > high[0]
+// Confirmed on bar[0], marks bar[1]
+// We use h15/l15 arrays indexed on the current 15m bar stream
+
+isSwingHigh15 = h15[1] > h15[2] and h15[1] > h15[3] and h15[1] > h15[0]
+isSwingLow15  = l15[1] < l15[2] and l15[1] < l15[3] and l15[1] < l15[0]
+
+// Confirmed swing price (bar[1] price, confirmed by bar[0] close)
+swingHighPrice15 = isSwingHigh15 ? h15[1] : float(na)
+swingLowPrice15  = isSwingLow15  ? l15[1] : float(na)
+
+// ── ROLLING SWING ARRAYS ─────────────────────────────────────────────────────
+// Store the last 6 confirmed swing highs and lows for sequence analysis
+var float[] swingHighs = array.new_float(0)
+var float[] swingLows  = array.new_float(0)
+
+if not na(swingHighPrice15)
+    array.push(swingHighs, swingHighPrice15)
+    if array.size(swingHighs) > 6
+        array.shift(swingHighs)
+
+if not na(swingLowPrice15)
+    array.push(swingLows, swingLowPrice15)
+    if array.size(swingLows) > 6
+        array.shift(swingLows)
+
+// ── SEQUENCE ANALYSIS ─────────────────────────────────────────────────────────
+// Look at last 4 swing highs and lows to count HH/LH and HL/LL
+f_sequence(arr) =>
+    sz = array.size(arr)
+    hh = 0
+    lh = 0
+    if sz >= 2
+        // use last 4 (or however many we have)
+        start = math.max(0, sz - 4)
+        for i = start + 1 to sz - 1
+            if array.get(arr, i) > array.get(arr, i - 1)
+                hh += 1
+            else if array.get(arr, i) < array.get(arr, i - 1)
+                lh += 1
+    [hh, lh]
+
+[hhCount, lhCount] = f_sequence(swingHighs)
+[hlCount, llCount] = f_sequence(swingLows)
+
+bullScore = hhCount + hlCount
+bearScore = lhCount + llCount
+
+// Determine structure
+// Requires at least one HH AND one HL for bullish, one LH AND one LL for bearish
+isBullish     = bullScore > bearScore and hhCount > 0 and hlCount > 0
+isBearish     = bearScore > bullScore and lhCount > 0 and llCount > 0
+isTransitory  = not isBullish and not isBearish
+
+// ── MOMENTUM (LEG SIZE) ANALYSIS ─────────────────────────────────────────────
+// Measure impulse leg sizes and compare last two
+f_legs(arr, direction) =>
+    // direction: 1 = bullish (measure SH-to-SH gains), -1 = bearish (SL-to-SL drops)
+    sz    = array.size(arr)
+    leg1  = float(na)   // second-to-last leg
+    leg2  = float(na)   // most recent leg
+    if sz >= minLegs
+        start = math.max(0, sz - (minLegs + 1))
+        for i = start + 1 to sz - 1
+            curr = array.get(arr, i)
+            prev = array.get(arr, i - 1)
+            legSize = direction == 1 ? curr - prev : prev - curr
+            if legSize > 0
+                leg1 := leg2
+                leg2 := legSize
+    [leg1, leg2]
+
+isSlowing = false
+if isBullish
+    [l1, l2] = f_legs(swingHighs, 1)
+    if not na(l1) and not na(l2) and l1 > 0
+        ratio = l2 / l1
+        isSlowing := ratio < slowThreshold
+
+if isBearish
+    [l1, l2] = f_legs(swingLows, -1)
+    if not na(l1) and not na(l2) and l1 > 0
+        ratio = l2 / l1
+        isSlowing := ratio < slowThreshold
+
+// ── FINAL BIAS STATE ─────────────────────────────────────────────────────────
+biasColor =
+  isBullish  and not isSlowing ? colorStrongBull  :
+  isBullish  and isSlowing     ? colorBullSlowing :
+  isBearish  and not isSlowing ? colorStrongBear  :
+  isBearish  and isSlowing     ? colorBearSlowing :
+  isTransitory                 ? colorTransitory  :
+  colorNone
+
+bgcolor(biasColor)
+
+// ── BIAS LABEL (top right of chart) ──────────────────────────────────────────
+biasText =
+  isBullish  and not isSlowing ? "STRONGLY BULLISH"  :
+  isBullish  and isSlowing     ? "BULLISH — SLOWING" :
+  isBearish  and not isSlowing ? "STRONGLY BEARISH"  :
+  isBearish  and isSlowing     ? "BEARISH — SLOWING" :
+  isTransitory                 ? "TRANSITIONAL"      :
+  "UNCLEAR"
+
+labelColor =
+  isBullish  and not isSlowing ? color.green  :
+  isBullish  and isSlowing     ? #90EE90      :
+  isBearish  and not isSlowing ? color.red    :
+  isBearish  and isSlowing     ? #FFB3B3      :
+  isTransitory                 ? color.yellow :
+  color.gray
+
+// Only draw label on the most recent bar to avoid clutter
+if barstate.islast
+    label.new(
+      bar_index, high * 1.001,
+      biasText,
+      style    = label.style_label_down,
+      color    = labelColor,
+      textcolor = color.white,
+      size     = size.normal
+     )
+
+// ── DEBUG TABLE (optional — shows swing counts) ───────────────────────────────
+showDebug = input.bool(false, "Show Debug Table")
+
+if showDebug and barstate.islast
+    var table t = table.new(position.top_left, 2, 6, bgcolor=color.new(color.black, 70), border_width=1)
+    table.cell(t, 0, 0, "Metric",    text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, "Value",     text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, "HH count",  text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(hhCount), text_color=color.lime,  text_size=size.small)
+    table.cell(t, 0, 2, "LH count",  text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(lhCount), text_color=color.red,   text_size=size.small)
+    table.cell(t, 0, 3, "HL count",  text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(hlCount), text_color=color.lime,  text_size=size.small)
+    table.cell(t, 0, 4, "LL count",  text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(llCount), text_color=color.red,   text_size=size.small)
+    table.cell(t, 0, 5, "Slowing",   text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 5, str.tostring(isSlowing), text_color=color.yellow, text_size=size.small)
