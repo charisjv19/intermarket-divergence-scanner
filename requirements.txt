@@ -1,0 +1,5 @@
+pandas>=2.2
+numpy>=1.26
+# tzdata provides the IANA zoneinfo database (America/New_York) used by the
+# scanners' tz_convert calls, in case the base image lacks system zoneinfo.
+tzdata>=2024.1
