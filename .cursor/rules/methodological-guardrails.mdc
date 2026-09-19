@@ -1,0 +1,23 @@
+---
+description: Anti-overfitting and honest-evaluation guardrails. Apply when changing scanner logic, thresholds, filters, or interpreting performance.
+globs:
+alwaysApply: true
+---
+
+# Methodological guardrails
+
+- Never adjust thresholds (e.g. `ES_FVG_MIN`) to improve historical signal
+  performance without flagging it explicitly first. Tuning parameters to fit
+  past winners is overfitting in this project — only structural/logic
+  corrections are automatically in-scope.
+- Do not treat "more signals" as an improvement on its own — signal quality is
+  the priority, not volume.
+- Macro bias alignment is the dominant performance driver in this dataset
+  (25% win rate against macro vs. 73% with macro) — don't propose removing or
+  weakening macro-bias filtering without flagging it.
+- All in-sample performance figures (v8.2–v8.7) were produced by reading
+  outcomes in the same window used to tune the code. Treat any in-sample win
+  rate or expectancy as unproven until confirmed on a frozen version run once
+  on unreviewed out-of-sample data.
+- Frozen scanner versions used for OOS testing must not be modified — bug
+  fixes only, no parameter changes, until that OOS run is complete.
