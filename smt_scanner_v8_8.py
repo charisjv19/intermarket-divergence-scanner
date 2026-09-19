@@ -16,9 +16,14 @@ Fixes applied in this file:
     so the failing-instrument sw1 must occur on the SAME bar as the
     confirming-instrument sw1 (zero tolerance), matching the sw2 alignment
     (MAX_SW_TIME_GAP_MINS = 0) and the structural-correctness invariant.
+  - [S2] Entry / stop / target protocol. SMT_IN_FVG now takes a MARKET entry at
+    the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
+    post-SMT FVG, with SL just outside the pre-existing FVG and TP = 1.5R.
+    FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
+    swing that preceded the FVG, floored at a minimum stop size) and TP = 3R.
+    New output columns: entry_price, stop_loss, take_profit, target_R.
 
-Pending (not yet implemented in this file): S2 (SMT_IN_FVG market-entry
-protocol), S11 (emit smt5m_prices).
+Pending (not yet implemented in this file): S11 (emit smt5m_prices).
 
 Inherited from v8.7:
   1. Dedup by sw2_time (not 30-min bucket).
@@ -52,6 +57,22 @@ SW2_STALENESS_BARS_5M   = 36
 # [v8.6] Multi-sw2 candidate consideration
 SW2_CANDIDATES          = 5      # last N swings to consider as sw2
 SW1_PARALLEL_TOL_MINS   = 0      # [v8.8 / S3] exact match only — no minute tolerance
+
+# [v8.8 / S2] Entry, stop-loss and take-profit protocol
+ES_TICK_SIZE            = 0.25   # index points per tick (MES/ES)
+NQ_TICK_SIZE            = 0.25   # index points per tick (MNQ/NQ)
+# SMT_IN_FVG: MARKET entry at the sw2 confirmation-bar close; SL just outside the
+# pre-existing FVG the SMT sits in; TP at a fixed R multiple.
+SMT_IN_FVG_TP_R         = 1.5    # take-profit multiple for SMT_IN_FVG (per audit)
+ES_SMT_IN_FVG_SL_BUFFER = 1.0    # points beyond the FVG edge (ES)
+NQ_SMT_IN_FVG_SL_BUFFER = 3.0    # points beyond the FVG edge (NQ)
+# FVG_AFTER_SMT: LIMIT entry at 50% of the post-SMT FVG; SL beyond the swing that
+# preceded the FVG, floored at a minimum stop size; TP at a fixed R multiple.
+FVG_AFTER_SMT_TP_R      = 3.0    # take-profit multiple for FVG_AFTER_SMT
+ES_FVG_SL_BUFFER        = 2.0    # points beyond the prior swing (ES)
+NQ_FVG_SL_BUFFER        = 8.0    # points beyond the prior swing (NQ)
+ES_MIN_SL_TICKS         = 20     # minimum SL distance (ES) = 20 * 0.25 = 5.0 pts
+NQ_MIN_SL_TICKS         = 40     # minimum SL distance (NQ) = 40 * 0.25 = 10.0 pts
 
 # [v8.3] 15m macro bias settings
 MACRO_SLOWING_THRESHOLD = 0.80
@@ -678,6 +699,7 @@ def find_fvg(sdf, start_idx, direction, instrument, lookahead, swept_extreme):
                 candidates.append(dict(
                     fvg_found=True,
                     fvg_bar=sdf.iloc[j]['et'],
+                    fvg_bar_idx=j,
                     fvg_low=lo,
                     fvg_high=hi,
                     entry_50=round(mid, 2),
@@ -695,6 +717,7 @@ def find_fvg(sdf, start_idx, direction, instrument, lookahead, swept_extreme):
                 candidates.append(dict(
                     fvg_found=True,
                     fvg_bar=sdf.iloc[j]['et'],
+                    fvg_bar_idx=j,
                     fvg_low=lo,
                     fvg_high=hi,
                     entry_50=round(mid, 2),
@@ -895,30 +918,83 @@ def run(es_path, nq_path):
                     continue
 
             current_price = row[f"close_{c['instrument'].lower()}"]
+            direction = c['direction']
+            instr     = c['instrument']
+            instr_l   = instr.lower()
 
-            # [v8.2] Check for pre-existing FVG (SMT_IN_FVG context tag)
-            # Then always look for a post-SMT FVG for the actual limit entry
+            # [v8.2] Pre-existing FVG that the SMT price sits inside → SMT_IN_FVG
             pre_fvg = find_preexisting_fvg(
-                sdf, i, c['direction'], c['instrument'],
-                PRE_FVG_LOOKBACK, current_price
+                sdf, i, direction, instr, PRE_FVG_LOOKBACK, current_price
             )
 
-            # Always find the post-SMT FVG for the limit entry
-            # [v8.7] FVG search starts from sw2 confirmation bar, not signal bar
-            fvg_start_idx = c.get('sw2_conf_idx', i)
-            fvg = find_fvg(
-                sdf, fvg_start_idx, c['direction'], c['instrument'],
-                FVG_LOOKAHEAD, c['swept_extreme']
-            )
-
-            if not fvg.get('fvg_found'):
-                continue  # no post-SMT FVG = no entry, no exceptions
-
-            # Determine signal type
             if pre_fvg:
-                entry_type = 'SMT_IN_FVG'
+                # ── [v8.8 S2] SMT_IN_FVG ──────────────────────────────────────
+                # MARKET entry at the close of the sw2 CONFIRMATION bar (sw2 bar + 1;
+                # the swing is only confirmed once the following bar closes). SL sits
+                # just outside the pre-existing FVG; TP at SMT_IN_FVG_TP_R. A post-SMT
+                # FVG is NOT required (decoupled from FVG_AFTER_SMT).
+                entry_type   = 'SMT_IN_FVG'
+                conf_bar_idx = c['sw2_conf_idx'] + 1
+                if conf_bar_idx >= len(sdf):
+                    continue  # confirmation bar has not closed yet
+                entry_price  = round(float(sdf.iloc[conf_bar_idx][f'close_{instr_l}']), 2)
+                sl_buf       = ES_SMT_IN_FVG_SL_BUFFER if instr == 'ES' else NQ_SMT_IN_FVG_SL_BUFFER
+                if direction == 'LONG':
+                    stop_loss = round(pre_fvg['pre_fvg_low'] - sl_buf, 2)
+                else:
+                    stop_loss = round(pre_fvg['pre_fvg_high'] + sl_buf, 2)
+                risk        = abs(entry_price - stop_loss)
+                target_R    = SMT_IN_FVG_TP_R
+                take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
+                              else round(entry_price - target_R * risk, 2)
+                fvg = None
             else:
+                # ── FVG_AFTER_SMT ─────────────────────────────────────────────
+                # LIMIT entry at 50% of the post-SMT FVG (unchanged). [v8.8 S2] SL is
+                # placed beyond the swing that formed just before the FVG (a swing low
+                # for LONG, a swing high for SHORT), floored at the minimum stop size;
+                # TP at FVG_AFTER_SMT_TP_R.
                 entry_type = 'FVG_AFTER_SMT'
+                fvg_start_idx = c.get('sw2_conf_idx', i)
+                fvg = find_fvg(
+                    sdf, fvg_start_idx, direction, instr,
+                    FVG_LOOKAHEAD, c['swept_extreme']
+                )
+                if not fvg.get('fvg_found'):
+                    continue  # no post-SMT FVG = no FVG_AFTER_SMT entry
+                entry_price = fvg['entry_50']
+
+                # most recent swing before the FVG formed, on the entry instrument
+                if instr == 'ES':
+                    swing_hist = sl_e_hist if direction == 'LONG' else sh_e_hist
+                else:
+                    swing_hist = sl_n_hist if direction == 'LONG' else sh_n_hist
+                prior_swing = None
+                for s in reversed(swing_hist):
+                    if s[1] < fvg['fvg_bar_idx']:
+                        prior_swing = s
+                        break
+
+                sl_buf = ES_FVG_SL_BUFFER if instr == 'ES' else NQ_FVG_SL_BUFFER
+                min_sl = (ES_MIN_SL_TICKS * ES_TICK_SIZE) if instr == 'ES' \
+                         else (NQ_MIN_SL_TICKS * NQ_TICK_SIZE)
+                if prior_swing is not None:
+                    if direction == 'LONG':
+                        stop_loss = round(prior_swing[0] - sl_buf, 2)
+                    else:
+                        stop_loss = round(prior_swing[0] + sl_buf, 2)
+                else:
+                    stop_loss = round(entry_price - min_sl, 2) if direction == 'LONG' \
+                                else round(entry_price + min_sl, 2)
+                # enforce the minimum stop size
+                risk = abs(entry_price - stop_loss)
+                if risk < min_sl:
+                    stop_loss = round(entry_price - min_sl, 2) if direction == 'LONG' \
+                                else round(entry_price + min_sl, 2)
+                    risk = min_sl
+                target_R    = FVG_AFTER_SMT_TP_R
+                take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
+                              else round(entry_price - target_R * risk, 2)
 
             signal = {
                 'smt_time':   row['et'],
@@ -927,13 +1003,19 @@ def run(es_path, nq_path):
                 'es_close':   row['close_es'],
                 'nq_close':   row['close_nq'],
                 **{k:v for k,v in c.items() if k not in ('swept_extreme','sw2_conf_idx')},
-                'fvg_found':  fvg['fvg_found'],
-                'fvg_bar':    fvg['fvg_bar'],
-                'fvg_low':    fvg['fvg_low'],
-                'fvg_high':   fvg['fvg_high'],
-                'entry_50':   fvg['entry_50'],
-                'fvg_size':   fvg['fvg_size'],
                 'entry_type': entry_type,
+                # [v8.8 S2] entry / stop / target
+                'entry_price': entry_price,
+                'stop_loss':   stop_loss,
+                'take_profit': take_profit,
+                'target_R':    target_R,
+                # post-SMT FVG context (FVG_AFTER_SMT only; None for SMT_IN_FVG)
+                'fvg_found':  bool(fvg),
+                'fvg_bar':    fvg['fvg_bar']  if fvg else None,
+                'fvg_low':    fvg['fvg_low']  if fvg else None,
+                'fvg_high':   fvg['fvg_high'] if fvg else None,
+                'entry_50':   fvg['entry_50'] if fvg else None,
+                'fvg_size':   fvg['fvg_size'] if fvg else None,
                 # [v8.3] 15m macro bias state at the moment of the signal
                 'es_15m_bias':       es_bias_15m,
                 'nq_15m_bias':       nq_bias_15m,
@@ -943,7 +1025,7 @@ def run(es_path, nq_path):
                 'smt5m_status':      smt5m['status'],
                 'smt5m_time':        smt5m['smt_time'],
                 'smt5m_prices':      smt5m['smt_prices'],
-                # pre-existing FVG context (None if not SMT_IN_FVG)
+                # pre-existing FVG context (SMT_IN_FVG only)
                 'pre_fvg_bar':  pre_fvg['pre_fvg_bar']  if pre_fvg else None,
                 'pre_fvg_low':  pre_fvg['pre_fvg_low']  if pre_fvg else None,
                 'pre_fvg_high': pre_fvg['pre_fvg_high'] if pre_fvg else None,
@@ -957,12 +1039,15 @@ def run(es_path, nq_path):
               f"Stale: {stale_filtered} | 5m SMT filtered: {smt5m_filtered}")
         return out, ts_filtered, mac_filtered, stale_filtered, smt5m_filtered
 
-    out = out[out['fvg_found']==True].copy()
+    # [v8.8 S2] SMT_IN_FVG is decoupled from the post-SMT FVG (market entry), so it
+    # legitimately has no post-SMT FVG. Require a post-SMT FVG only for FVG_AFTER_SMT.
+    out = out[(out['entry_type']=='SMT_IN_FVG') | (out['fvg_found']==True)].copy()
 
-    # FVG size filter
+    # FVG size filter — applies to FVG_AFTER_SMT only. The SMT_IN_FVG gap was already
+    # size-checked inside find_preexisting_fvg().
     es_mask = (out['instrument']=='ES') & (out['fvg_size']>=ES_FVG_MIN) & (out['fvg_size']<=ES_FVG_MAX)
     nq_mask = (out['instrument']=='NQ') & (out['fvg_size']>=NQ_FVG_MIN) & (out['fvg_size']<=NQ_FVG_MAX)
-    out = out[es_mask|nq_mask].copy()
+    out = out[(out['entry_type']=='SMT_IN_FVG') | es_mask | nq_mask].copy()
 
     out = out.sort_values('smt_time').reset_index(drop=True)
 
