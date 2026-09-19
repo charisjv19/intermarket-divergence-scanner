@@ -1,7 +1,7 @@
 ---
-description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, dedup, wick-based SMT, equal high/low).
-globs: smt_scanner_v*.py,smt_scanner_v*,swing_marker_detection.py,macro_bias_diagnostic.py
-alwaysApply: false
+description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, dedup, wick-based SMT, equal high/low). Always applied.
+globs:
+alwaysApply: true
 ---
 
 # Structural correctness (do not regress these)
