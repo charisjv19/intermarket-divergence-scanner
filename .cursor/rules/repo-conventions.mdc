@@ -1,0 +1,21 @@
+---
+description: Branching, tagging, and diff conventions for this dual research/live repo. Applies to every change.
+globs:
+alwaysApply: true
+---
+
+# Repo conventions
+
+- Do **not** commit directly to `main`. Use feature/fix branches for scanner
+  changes (e.g. `fix/s3-sw1-tolerance`, `feat/s2-entry-logic`) and merge to
+  `main` only after the change has been validated against manual review.
+- Maintain a `live` branch separate from `main`/`dev` — only versions that
+  have passed manual review **and** out-of-sample testing get promoted to
+  `live`. `live` is what actually runs against a funded account.
+- Tag every version before it touches a funded account or an out-of-sample
+  test (e.g. `v8.8-oos`, `v8.8-live-2026-09`). Never let a bug fix on `main`
+  silently alter the exact code behind a tagged OOS result or a live run — if
+  `main` has moved on, cut the fix as a patch against the tag itself, then
+  re-tag.
+- Prefer small, targeted diffs over refactors; don't rename variables or
+  restructure surrounding code while fixing a specific bug.

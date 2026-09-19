@@ -1,0 +1,19 @@
+---
+description: What this project is and its dual research + live-trading purpose. Read this first for any task in this repo.
+globs:
+alwaysApply: true
+---
+
+# SMT+FVG Intermarket Divergence Scanner
+
+This repo serves two purposes at once:
+
+- A **research portfolio** documenting the iterative development of an ES/NQ
+  intermarket-divergence (SMT) + Fair Value Gap (FVG) signal detection system.
+- **Live product development** toward a profitable trading system that runs
+  against a funded account.
+
+The end goal is live profitability, so correctness and honest evaluation
+matter more than impressive-looking in-sample numbers. Treat structural/logic
+correctness, methodological discipline, and reproducibility as first-class
+concerns — see the other rules in this directory.

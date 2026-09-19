@@ -1,0 +1,36 @@
+---
+description: Scope and required fixes for scanner v8.8 (Sep 2026 audit SMT_FVG_Strategy_Audit_Sep2026). Read before making any v8.8 change.
+globs: smt_scanner_v*.py
+alwaysApply: false
+---
+
+# v8.8 required fixes (Sep 2026 independent audit — SMT_FVG_Strategy_Audit_Sep2026)
+
+Scope for v8.8 is **S1, S2, S3, and S11 ONLY**. Do **not** touch thresholds
+(`ES_FVG_MIN`, `NQ_FVG_MIN`, or any other threshold) in this version — the
+audit explicitly calls out threshold review as a separate, later step, after
+the May–June out-of-sample test.
+
+- **S1 (High):** the `sw1` walk-back's "same day" check uses calendar date
+  only, never session — so an afternoon signal can pull its `sw1` from the
+  morning session of the same day. 9 trades affected.
+  Fix: make the walk-back session-aware, not just date-aware.
+- **S2 (High):** `SMT_IN_FVG` signals currently enter as a limit order at 50%
+  of the next FVG (documented as deliberate in the v8.2 docstring, but wrong).
+  6 trades affected.
+  Fix: market entry at the close of the `sw2`-confirming bar, TP = 1.5R,
+  SL just outside the FVG.
+- **S3 (High):** `sw1` parallel tolerance is currently 2 minutes — confirm the
+  actual variable name in code (may not still be `MAX_SW_TIME_GAP_MINS` from
+  earlier versions). 6 trades affected.
+  Fix: set the tolerance to 0 (exact match).
+- **S11 (Low):** 5m SMT status is emitted without the swing prices that
+  produced it, making "agree"/"conflict" unverifiable by hand.
+  Fix: add `smt5m_prices` to the output.
+- Do **NOT** fix S4–S10 in v8.8 — they are Medium/Low severity and out of scope
+  for this version per the audit's recommended sequence.
+
+After S1/S2/S3/S11 are fixed: re-run v8.8 on the existing Feb–Apr data and
+review only the signals that changed relative to v8.7. Then freeze v8.8 before
+running it once, blind, on unreviewed May–June data for the real out-of-sample
+test.
