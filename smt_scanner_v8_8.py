@@ -646,11 +646,15 @@ def apply_min_stop(entry_price, stop_loss, direction, min_sl):
 def compute_smt_in_fvg_stop(entry_price, pre_fvg_low, pre_fvg_high, direction,
                             sl_buf, min_sl):
     """
-    SMT_IN_FVG stop. Pre-FVG membership is checked at the confirmation-bar
-    close, so entry_price is inside [pre_fvg_low, pre_fvg_high]. SL is
-    unconditionally just outside the FVG, then floored at min_sl.
+    SMT_IN_FVG stop. Unconditionally just outside the pre-existing FVG:
       LONG:  pre_fvg_low  - buffer
       SHORT: pre_fvg_high + buffer
+    then floor at min_sl.
+
+    min()/max() selection between the FVG edge and entry is not needed:
+    entry_price is always inside [pre_fvg_low, pre_fvg_high] by construction,
+    because the pre-FVG membership check is anchored to the confirmation bar
+    (sw2_conf_idx + 1) and uses that bar's close.
     """
     if direction == 'LONG':
         stop_loss = round(pre_fvg_low - sl_buf, 2)
