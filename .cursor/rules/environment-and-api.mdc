@@ -1,0 +1,23 @@
+---
+description: Environment, data-access, and API constraints (TopstepX ProjectX, bar data, contracts, dashboard, swing-detection ground truth).
+globs: *.py,*.html
+alwaysApply: false
+---
+
+# Environment & API constraints
+
+- Never use the `project-x-py` library — it depends on `uvloop`, which is
+  incompatible with Windows. Use the raw `requests` library for all TopstepX
+  ProjectX API calls.
+- Auth: `POST` to `/api/Auth/loginKey`.
+- Bar data: `/api/History/retrieveBars` with `unit: 2`, `unitNumber: 1`,
+  `live: False`. `live: True` returns errors, not clean data.
+- Data access runs through a Tradovate live account.
+- Active contracts (MES, MNQ) are front-month and roll quarterly — the June
+  2026 front month (M26) was set to roll in September 2026. Confirm the current
+  contract symbol before assuming a hardcoded one is still correct.
+- The local HTML dashboard must be served via `python -m http.server 8000` —
+  opening the file directly causes CORS errors.
+- Swing detection (Pine Script "Swing High/Low Marker" v1.2) has been verified
+  to match CSV exports exactly — treat that CSV column as ground truth if you
+  ever touch swing-detection logic.
