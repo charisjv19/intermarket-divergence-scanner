@@ -18,9 +18,12 @@ Fixes applied in this file:
     (MAX_SW_TIME_GAP_MINS = 0) and the structural-correctness invariant.
   - [S2] Entry / stop / target protocol. SMT_IN_FVG now takes a MARKET entry at
     the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
-    post-SMT FVG, with SL just outside the pre-existing FVG and TP = 1.5R.
+    post-SMT FVG. SL uses option C: beyond the more protective of the
+    pre-existing FVG edge and the confirmation-close entry, then floored at
+    the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
     FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
-    swing that preceded the FVG, floored at a minimum stop size) and TP = 3R.
+    swing that preceded the FVG, floored at the same minimum stop size) and
+    TP = 3R.
     New output columns: entry_price, stop_loss, take_profit, target_R.
 
 Pending (not yet implemented in this file): S11 (emit smt5m_prices).
@@ -61,16 +64,18 @@ SW1_PARALLEL_TOL_MINS   = 0      # [v8.8 / S3] exact match only — no minute to
 # [v8.8 / S2] Entry, stop-loss and take-profit protocol
 ES_TICK_SIZE            = 0.25   # index points per tick (MES/ES)
 NQ_TICK_SIZE            = 0.25   # index points per tick (MNQ/NQ)
-# SMT_IN_FVG: MARKET entry at the sw2 confirmation-bar close; SL just outside the
-# pre-existing FVG the SMT sits in; TP at a fixed R multiple.
+# SMT_IN_FVG: MARKET entry at the sw2 confirmation-bar close; SL beyond the more
+# protective of (FVG edge, entry), then floored at the shared min-stop; TP at a
+# fixed R multiple.
 SMT_IN_FVG_TP_R         = 1.5    # take-profit multiple for SMT_IN_FVG (per audit)
-ES_SMT_IN_FVG_SL_BUFFER = 1.0    # points beyond the FVG edge (ES)
-NQ_SMT_IN_FVG_SL_BUFFER = 3.0    # points beyond the FVG edge (NQ)
+ES_SMT_IN_FVG_SL_BUFFER = 1.0    # points beyond the FVG-or-entry anchor (ES)
+NQ_SMT_IN_FVG_SL_BUFFER = 3.0    # points beyond the FVG-or-entry anchor (NQ)
 # FVG_AFTER_SMT: LIMIT entry at 50% of the post-SMT FVG; SL beyond the swing that
 # preceded the FVG, floored at a minimum stop size; TP at a fixed R multiple.
 FVG_AFTER_SMT_TP_R      = 3.0    # take-profit multiple for FVG_AFTER_SMT
 ES_FVG_SL_BUFFER        = 2.0    # points beyond the prior swing (ES)
 NQ_FVG_SL_BUFFER        = 8.0    # points beyond the prior swing (NQ)
+# Shared minimum stop — applied to BOTH SMT_IN_FVG and FVG_AFTER_SMT.
 ES_MIN_SL_TICKS         = 20     # minimum SL distance (ES) = 20 * 0.25 = 5.0 pts
 NQ_MIN_SL_TICKS         = 40     # minimum SL distance (NQ) = 40 * 0.25 = 10.0 pts
 
@@ -619,6 +624,48 @@ def sw1_is_fresh(t1, t2):
     return gap_mins <= STALENESS_LIMIT_MINS
 
 
+def min_stop_points(instrument):
+    """Minimum stop distance in index points (20 ticks ES / 40 ticks NQ)."""
+    if instrument == 'ES':
+        return ES_MIN_SL_TICKS * ES_TICK_SIZE
+    return NQ_MIN_SL_TICKS * NQ_TICK_SIZE
+
+
+def apply_min_stop(entry_price, stop_loss, direction, min_sl):
+    """Push the stop further from entry if risk is below the tick floor."""
+    risk = abs(entry_price - stop_loss)
+    if risk < min_sl:
+        if direction == 'LONG':
+            stop_loss = round(entry_price - min_sl, 2)
+        else:
+            stop_loss = round(entry_price + min_sl, 2)
+        risk = min_sl
+    return stop_loss, risk
+
+
+def compute_smt_in_fvg_stop(entry_price, pre_fvg_low, pre_fvg_high, direction,
+                            sl_buf, min_sl):
+    """
+    SMT_IN_FVG option C stop.
+
+    The confirmation-bar close (entry) can sit on the other side of the
+    pre-existing FVG from the signal-bar price that tagged the gap. Placing SL
+    at FVG-edge ± buffer alone can then land on the wrong side of entry.
+
+    Option C: anchor on the more protective of the FVG edge and the entry,
+    then add the buffer, then floor at min_sl.
+      LONG:  min(FVG low,  entry) - buffer
+      SHORT: max(FVG high, entry) + buffer
+    """
+    if direction == 'LONG':
+        anchor = min(pre_fvg_low, entry_price)
+        stop_loss = round(anchor - sl_buf, 2)
+    else:
+        anchor = max(pre_fvg_high, entry_price)
+        stop_loss = round(anchor + sl_buf, 2)
+    return apply_min_stop(entry_price, stop_loss, direction, min_sl)
+
+
 # ── [v8.2] FIND PRE-EXISTING FVG (SMT_IN_FVG) → now returns limit at 50% ─────
 def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_price):
     """
@@ -930,20 +977,24 @@ def run(es_path, nq_path):
             if pre_fvg:
                 # ── [v8.8 S2] SMT_IN_FVG ──────────────────────────────────────
                 # MARKET entry at the close of the sw2 CONFIRMATION bar (sw2 bar + 1;
-                # the swing is only confirmed once the following bar closes). SL sits
-                # just outside the pre-existing FVG; TP at SMT_IN_FVG_TP_R. A post-SMT
-                # FVG is NOT required (decoupled from FVG_AFTER_SMT).
+                # the swing is only confirmed once the following bar closes). SL is
+                # option C: beyond min/max(FVG edge, entry) plus buffer, then floored
+                # at the shared 20/40-tick minimum. A post-SMT FVG is NOT required.
                 entry_type   = 'SMT_IN_FVG'
                 conf_bar_idx = c['sw2_conf_idx'] + 1
                 if conf_bar_idx >= len(sdf):
                     continue  # confirmation bar has not closed yet
                 entry_price  = round(float(sdf.iloc[conf_bar_idx][f'close_{instr_l}']), 2)
                 sl_buf       = ES_SMT_IN_FVG_SL_BUFFER if instr == 'ES' else NQ_SMT_IN_FVG_SL_BUFFER
-                if direction == 'LONG':
-                    stop_loss = round(pre_fvg['pre_fvg_low'] - sl_buf, 2)
-                else:
-                    stop_loss = round(pre_fvg['pre_fvg_high'] + sl_buf, 2)
-                risk        = abs(entry_price - stop_loss)
+                min_sl       = min_stop_points(instr)
+                stop_loss, risk = compute_smt_in_fvg_stop(
+                    entry_price,
+                    pre_fvg['pre_fvg_low'],
+                    pre_fvg['pre_fvg_high'],
+                    direction,
+                    sl_buf,
+                    min_sl,
+                )
                 target_R    = SMT_IN_FVG_TP_R
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
@@ -976,8 +1027,7 @@ def run(es_path, nq_path):
                         break
 
                 sl_buf = ES_FVG_SL_BUFFER if instr == 'ES' else NQ_FVG_SL_BUFFER
-                min_sl = (ES_MIN_SL_TICKS * ES_TICK_SIZE) if instr == 'ES' \
-                         else (NQ_MIN_SL_TICKS * NQ_TICK_SIZE)
+                min_sl = min_stop_points(instr)
                 if prior_swing is not None:
                     if direction == 'LONG':
                         stop_loss = round(prior_swing[0] - sl_buf, 2)
@@ -986,12 +1036,7 @@ def run(es_path, nq_path):
                 else:
                     stop_loss = round(entry_price - min_sl, 2) if direction == 'LONG' \
                                 else round(entry_price + min_sl, 2)
-                # enforce the minimum stop size
-                risk = abs(entry_price - stop_loss)
-                if risk < min_sl:
-                    stop_loss = round(entry_price - min_sl, 2) if direction == 'LONG' \
-                                else round(entry_price + min_sl, 2)
-                    risk = min_sl
+                stop_loss, risk = apply_min_stop(entry_price, stop_loss, direction, min_sl)
                 target_R    = FVG_AFTER_SMT_TP_R
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
