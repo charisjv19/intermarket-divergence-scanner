@@ -18,9 +18,10 @@ Fixes applied in this file:
     (MAX_SW_TIME_GAP_MINS = 0) and the structural-correctness invariant.
   - [S2] Entry / stop / target protocol. SMT_IN_FVG now takes a MARKET entry at
     the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
-    post-SMT FVG. SL uses option C: beyond the more protective of the
-    pre-existing FVG edge and the confirmation-close entry, then floored at
-    the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
+    post-SMT FVG. Pre-FVG membership is checked at the confirmation-bar
+    close (sw2 + 1), not the outer-loop bar. SL is just outside that FVG
+    (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
+    floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
     FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
     swing that preceded the FVG, floored at the same minimum stop size) and
     TP = 3R.
@@ -64,12 +65,11 @@ SW1_PARALLEL_TOL_MINS   = 0      # [v8.8 / S3] exact match only — no minute to
 # [v8.8 / S2] Entry, stop-loss and take-profit protocol
 ES_TICK_SIZE            = 0.25   # index points per tick (MES/ES)
 NQ_TICK_SIZE            = 0.25   # index points per tick (MNQ/NQ)
-# SMT_IN_FVG: MARKET entry at the sw2 confirmation-bar close; SL beyond the more
-# protective of (FVG edge, entry), then floored at the shared min-stop; TP at a
-# fixed R multiple.
+# SMT_IN_FVG: MARKET entry at the sw2 confirmation-bar close; SL just outside
+# the pre-existing FVG that close sits in, then floored at the shared min-stop.
 SMT_IN_FVG_TP_R         = 1.5    # take-profit multiple for SMT_IN_FVG (per audit)
-ES_SMT_IN_FVG_SL_BUFFER = 1.0    # points beyond the FVG-or-entry anchor (ES)
-NQ_SMT_IN_FVG_SL_BUFFER = 3.0    # points beyond the FVG-or-entry anchor (NQ)
+ES_SMT_IN_FVG_SL_BUFFER = 1.0    # points beyond the FVG edge (ES)
+NQ_SMT_IN_FVG_SL_BUFFER = 3.0    # points beyond the FVG edge (NQ)
 # FVG_AFTER_SMT: LIMIT entry at 50% of the post-SMT FVG; SL beyond the swing that
 # preceded the FVG, floored at a minimum stop size; TP at a fixed R multiple.
 FVG_AFTER_SMT_TP_R      = 3.0    # take-profit multiple for FVG_AFTER_SMT
@@ -646,34 +646,25 @@ def apply_min_stop(entry_price, stop_loss, direction, min_sl):
 def compute_smt_in_fvg_stop(entry_price, pre_fvg_low, pre_fvg_high, direction,
                             sl_buf, min_sl):
     """
-    SMT_IN_FVG option C stop.
-
-    The confirmation-bar close (entry) can sit on the other side of the
-    pre-existing FVG from the signal-bar price that tagged the gap. Placing SL
-    at FVG-edge ± buffer alone can then land on the wrong side of entry.
-
-    Option C: anchor on the more protective of the FVG edge and the entry,
-    then add the buffer, then floor at min_sl.
-      LONG:  min(FVG low,  entry) - buffer
-      SHORT: max(FVG high, entry) + buffer
+    SMT_IN_FVG stop. Pre-FVG membership is checked at the confirmation-bar
+    close, so entry_price is inside [pre_fvg_low, pre_fvg_high]. SL is
+    unconditionally just outside the FVG, then floored at min_sl.
+      LONG:  pre_fvg_low  - buffer
+      SHORT: pre_fvg_high + buffer
     """
     if direction == 'LONG':
-        anchor = min(pre_fvg_low, entry_price)
-        stop_loss = round(anchor - sl_buf, 2)
+        stop_loss = round(pre_fvg_low - sl_buf, 2)
     else:
-        anchor = max(pre_fvg_high, entry_price)
-        stop_loss = round(anchor + sl_buf, 2)
+        stop_loss = round(pre_fvg_high + sl_buf, 2)
     return apply_min_stop(entry_price, stop_loss, direction, min_sl)
 
 
 # ── [v8.2] FIND PRE-EXISTING FVG (SMT_IN_FVG) → now returns limit at 50% ─────
 def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_price):
     """
-    Looks back for a pre-existing FVG that the current price is inside.
-    v8.2: entry_type is SMT_IN_FVG but entry is a LIMIT at 50% of a
-    post-SMT FVG (handled in main loop), not a market entry.
-    This function still identifies the pre-existing FVG for context/tagging,
-    but the actual entry FVG is found by find_fvg() after the SMT.
+    Looks back from smt_idx for a pre-existing FVG that current_price is inside.
+    Callers must pass the sw2 confirmation bar (sw2_conf_idx + 1) as smt_idx
+    and that bar's close as current_price, so membership matches the market entry.
     """
     col_h = f'high_{instrument.lower()}'
     col_l = f'low_{instrument.lower()}'
@@ -964,29 +955,32 @@ def run(es_path, nq_path):
                     smt5m_filtered += 1
                     continue
 
-            current_price = row[f"close_{c['instrument'].lower()}"]
             direction = c['direction']
             instr     = c['instrument']
             instr_l   = instr.lower()
 
-            # [v8.2] Pre-existing FVG that the SMT price sits inside → SMT_IN_FVG
+            # Confirmation bar (sw2 + 1) is the market-entry / membership bar.
+            # Must be computed before SMT_IN_FVG vs FVG_AFTER_SMT so both the
+            # pre-FVG lookup and entry_price refer to the same point in time —
+            # not the outer-loop bar i, which can be many bars later for a
+            # still-fresh re-evaluated candidate.
+            conf_bar_idx = c['sw2_conf_idx'] + 1
+            if conf_bar_idx >= len(sdf):
+                continue  # confirmation bar has not closed yet
+            entry_price = round(float(sdf.iloc[conf_bar_idx][f'close_{instr_l}']), 2)
+
             pre_fvg = find_preexisting_fvg(
-                sdf, i, direction, instr, PRE_FVG_LOOKBACK, current_price
+                sdf, conf_bar_idx, direction, instr, PRE_FVG_LOOKBACK, entry_price
             )
 
             if pre_fvg:
                 # ── [v8.8 S2] SMT_IN_FVG ──────────────────────────────────────
-                # MARKET entry at the close of the sw2 CONFIRMATION bar (sw2 bar + 1;
-                # the swing is only confirmed once the following bar closes). SL is
-                # option C: beyond min/max(FVG edge, entry) plus buffer, then floored
-                # at the shared 20/40-tick minimum. A post-SMT FVG is NOT required.
-                entry_type   = 'SMT_IN_FVG'
-                conf_bar_idx = c['sw2_conf_idx'] + 1
-                if conf_bar_idx >= len(sdf):
-                    continue  # confirmation bar has not closed yet
-                entry_price  = round(float(sdf.iloc[conf_bar_idx][f'close_{instr_l}']), 2)
-                sl_buf       = ES_SMT_IN_FVG_SL_BUFFER if instr == 'ES' else NQ_SMT_IN_FVG_SL_BUFFER
-                min_sl       = min_stop_points(instr)
+                # MARKET entry at the confirmation-bar close. SL just outside
+                # the pre-existing FVG that close sits in, floored at the
+                # shared 20/40-tick minimum. A post-SMT FVG is NOT required.
+                entry_type = 'SMT_IN_FVG'
+                sl_buf = ES_SMT_IN_FVG_SL_BUFFER if instr == 'ES' else NQ_SMT_IN_FVG_SL_BUFFER
+                min_sl = min_stop_points(instr)
                 stop_loss, risk = compute_smt_in_fvg_stop(
                     entry_price,
                     pre_fvg['pre_fvg_low'],
