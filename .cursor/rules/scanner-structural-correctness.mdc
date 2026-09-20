@@ -1,5 +1,5 @@
 ---
-description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, dedup, wick-based SMT, equal high/low). Always applied.
+description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, SMT_IN_FVG confirmation-bar anchoring, dedup, wick-based SMT, equal high/low). Always applied.
 globs:
 alwaysApply: true
 ---
@@ -11,6 +11,9 @@ alwaysApply: true
   even to raise signal count. (This is defect **S3** — see the v8.8 audit-scope
   rule for its audit ID and current fix status.)
 - FVG search must start from `sw2_conf_idx`, not from the signal bar.
+- SMT_IN_FVG's pre-existing FVG check must be anchored to the confirmation
+  bar (`sw2_conf_idx + 1`), not the current scanning bar (`i`), so
+  `entry_price` and FVG membership always reference the same bar.
 - Signal dedup must be based on `sw2_conf_time` within a 30-min session bucket,
   per direction per instrument, to prevent duplicate signals.
 - SMT divergence must be measured on **wicks**, at structural
