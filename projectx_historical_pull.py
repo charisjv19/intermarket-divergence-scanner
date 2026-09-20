@@ -363,7 +363,7 @@ def pull_historical(
     chunk_hours: float = CHUNK_HOURS,
 ) -> pd.DataFrame:
     client = client or ProjectXClient()
-    print(f"Auth: loginKey as {client.username}", flush=True)
+    print("Auth: loginKey ok", flush=True)
     client.authenticate()
     print(
         f"Pull {contract_id}  {iso_z(start)} → {iso_z(end)}  "
