@@ -11,19 +11,12 @@ Scope for v8.8 is **S1, S2, S3, and S11 ONLY**. Do **not** touch thresholds
 audit explicitly calls out threshold review as a separate, later step, after
 the May–June out-of-sample test.
 
-- **S1 (High):** the `sw1` walk-back's "same day" check uses calendar date
-  only, never session — so an afternoon signal can pull its `sw1` from the
-  morning session of the same day. 9 trades affected.
-  Fix: make the walk-back session-aware, not just date-aware.
-- **S2 (High):** `SMT_IN_FVG` signals currently enter as a limit order at 50%
-  of the next FVG (documented as deliberate in the v8.2 docstring, but wrong).
-  6 trades affected.
-  Fix: market entry at the close of the `sw2`-confirming bar, TP = 1.5R,
-  SL just outside the FVG.
-- **S3 (High):** `sw1` parallel tolerance is currently 2 minutes — confirm the
-  actual variable name in code (may not still be `MAX_SW_TIME_GAP_MINS` from
-  earlier versions). 6 trades affected.
-  Fix: set the tolerance to 0 (exact match).
+- **S1 (High) — done:** `sw1` walk-back is session-aware (same NY Morning /
+  NY Afternoon as the signal), not calendar-date-only.
+- **S2 (High) — done:** `SMT_IN_FVG` is a market entry at the `sw2`
+  confirmation-bar close (`sw2_conf_idx + 1`), with pre-FVG membership checked
+  on that same bar; SL just outside the FVG (then min-tick floor); TP = 1.5R.
+- **S3 (High) — done:** `SW1_PARALLEL_TOL_MINS` is 0 (exact-bar `sw1` match).
 - **S11 (Low):** 5m SMT status is emitted without the swing prices that
   produced it, making "agree"/"conflict" unverifiable by hand.
   Fix: add `smt5m_prices` to the output.
