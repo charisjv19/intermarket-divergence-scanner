@@ -1,0 +1,96 @@
+---
+description: Fill-simulator rules for backtest/simulate_fills.py (touch logic, same-bar stop-first, FVG_AFTER_SMT limit cancels, session-end, known gaps). Apply when changing the simulator or reporting its results.
+globs: backtest/simulate_fills.py,backtest/compare_versions.py,test_simulate_fills.py
+alwaysApply: true
+---
+
+# Fill simulator (`backtest/simulate_fills.py`)
+
+Walks real 1-minute OHLC from each v8.8 signal. Outcomes are `win`,
+`loss`, `no_fill`, and `no_fill_by_eod`. `realized_R` comes from the
+simulated exit, **not** from `target_R`. Do not invent a fill.
+
+SMT_IN_FVG is a market fill at the confirmation-bar **close**. That
+bar's high/low already printed, so stop/target checks start on the
+**next** bar. FVG_AFTER_SMT is a limit at the FVG 50% level; the fill
+bar itself is eligible for stop/target after the limit trades.
+
+## Touch logic — high/low, never close
+
+Stop and target are hit when the bar **high** or **low** reaches the
+level. Never use the close to decide a stop or target.
+
+- LONG stop: `low <= stop_loss`. LONG target: `high >= take_profit`.
+- SHORT stop: `high >= stop_loss`. SHORT target: `low <= take_profit`.
+- A bar that opens through the stop is a loss; a bar that opens through
+  the target is a win. Close is used only as the SMT_IN_FVG fill price
+  and as the flatten price on `no_fill_by_eod`.
+
+## Same-bar ambiguity — stop first
+
+If both stop and target trade in the same bar, the stop is assumed hit
+**first** (conservative default). 1-minute OHLC has no intra-bar order,
+so this is a stated choice, not a data fact. Do not flip it to
+target-first to improve historical R.
+
+## FVG_AFTER_SMT limit cancels — Juliana 8.7-era trading notes
+
+These two cancels are **stated rules from Juliana's own 8.7-era
+trading notes**, not arbitrary simulator knobs. A later cleanup must
+not drop them because they look like extra filters. Cancel is
+`no_fill` (the limit never traded; do not fake a fill).
+
+1. **Time:** if the limit is not filled within **20 minutes** of the
+   FVG identification bar (`fvg_bar`), cancel.
+2. **Price:** if, before the limit fills, price reaches **50% of the
+   distance to `take_profit`**, cancel. The setup has already moved
+   toward the target without filling the limit; chasing it is not the
+   rule.
+
+Current `simulate_fills.py` still walks an unfilled limit until
+session end. That is an implementation gap against this spec, not a
+decision to abandon the notes. Implement the two cancels; do not
+delete them from this file.
+
+## Session-end handling
+
+Default: a filled trade that hits neither stop nor target by session
+close is `no_fill_by_eod`, flattened at that last in-window bar's
+close. Scanner session windows: NY Morning 08:00–10:30 ET, NY
+Afternoon 13:00–15:00 ET. `session_end_utc()` currently always uses
+those two closes.
+
+**NY Morning exception (stated rule):** a trade **entered after
+09:45 ET** closes at **11:00 ET** instead of the normal 10:30 NY
+Morning cutoff. The extra half-hour is only for late morning entries
+that would otherwise have almost no time to work.
+
+**This extended cutoff does not apply to NY Afternoon signals.**
+Afternoon remains 15:00. There is no analogue (no "entered after
+14:15, close at 15:30"). 09:45 and 11:00 are morning clock times;
+`session_end_utc()` has no afternoon extension either. Do not copy
+the 11:00 exception onto afternoon trades.
+
+Current `simulate_fills.py` does not yet implement the 09:45→11:00
+morning exception (every NY Morning trade still ends at 10:30). Same
+as the limit cancels: spec stands; code is behind.
+
+## Known gaps — disclose on every report
+
+Any report, CSV, or summary produced from this simulator **must
+disclose these three gaps**. They are not implied by a win rate.
+
+1. **Partial exits are not simulated.** No codified rule exists for
+   scaling out. Every fill is all-or-nothing at stop, target, or
+   session flatten.
+2. **Concurrent-trade limits are not enforced.** Policy is undecided
+   (how many overlapping positions are allowed). The simulator will
+   take every signal independently, including two that are live at
+   the same time.
+3. **5m-opposing-SMT blocking is not implemented.** That filter is in
+   an evidence-gathering stage. Do not treat simulator results as
+   "already blocked on opposing 5m SMT."
+
+Do not silently close any of these three by coding a guess. When a
+codified rule exists, implement it and remove that item from this
+list.
