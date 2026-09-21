@@ -20,7 +20,10 @@ Fixes applied in this file:
     the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
     post-SMT FVG. Pre-FVG membership is checked at the confirmation-bar
     close (sw2 + 1), not the outer-loop bar. smt_time is that same
-    confirmation-bar timestamp, not the later scan bar i. SL is just outside that FVG
+    confirmation-bar timestamp, not the later scan bar i. Confirmation
+    must be within MAX_CONF_GAP_MINS of sw2 — sdf is session+pre_session
+    only, so index+1 can jump 14:29 → next 07:30; those are dropped.
+    SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
     FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
@@ -58,6 +61,12 @@ PRE_SESSION_LOOKBACK_MINS = 30
 PRIOR_SWING_LOOKBACK    = 20
 SW2_STALENESS_MINS_1M   = 120
 SW2_STALENESS_BARS_5M   = 36
+# sdf keeps session + pre_session bars only. Consecutive sdf indices are
+# not always consecutive 1-minute bars: NY Afternoon session ends at 14:29
+# (15:00 minus SESSION_CUTOFF_MINS), and the next sdf row is next day's
+# 07:30 pre_session. Confirmation is sw2_conf_idx + 1, so a last-bar-of-
+# session swing would otherwise be priced ~17 hours later. Drop it.
+MAX_CONF_GAP_MINS       = 5
 
 # [v8.6] Multi-sw2 candidate consideration
 SW2_CANDIDATES          = 5      # last N swings to consider as sw2
@@ -613,6 +622,49 @@ def timestamps_aligned(t1, t2):
     return abs((pd.Timestamp(t1)-pd.Timestamp(t2)).total_seconds())/60 <= MAX_SW_TIME_GAP_MINS
 
 
+def confirmation_gap_minutes(sw2_time, conf_time):
+    """Minutes from the swing-flag bar to the sdf row used as confirmation."""
+    return (pd.Timestamp(conf_time) - pd.Timestamp(sw2_time)).total_seconds() / 60.0
+
+
+def confirmation_bar_is_contiguous(sw2_time, conf_time, max_gap_mins=None):
+    """True when confirmation is after sw2 and within max_gap_mins (default 5)."""
+    if max_gap_mins is None:
+        max_gap_mins = MAX_CONF_GAP_MINS
+    gap = confirmation_gap_minutes(sw2_time, conf_time)
+    return 0 < gap <= max_gap_mins
+
+
+def check_sw2_confirmation_gap(signals, max_gap_mins=None):
+    """
+    Piece 3 / regression: every output row's smt_time must sit within
+    max_gap_mins of sw2_conf_time. Empty list = pass.
+    """
+    if max_gap_mins is None:
+        max_gap_mins = MAX_CONF_GAP_MINS
+    if signals is None or getattr(signals, 'empty', True):
+        return []
+    missing = [c for c in ('smt_time', 'sw2_conf_time') if c not in signals.columns]
+    if missing:
+        return [f"signal CSV missing {missing}; cannot check confirmation gap"]
+    smt = pd.to_datetime(signals['smt_time'], utc=True)
+    sw2 = pd.to_datetime(signals['sw2_conf_time'], utc=True)
+    gap = (smt - sw2).dt.total_seconds() / 60.0
+    bad = (gap <= 0) | (gap > max_gap_mins)
+    n = int(bad.sum())
+    if not n:
+        return []
+    sample = signals.loc[bad, ['sw2_conf_time', 'smt_time']].head(3)
+    rows = '; '.join(
+        f"sw2={r.sw2_conf_time} smt_time={r.smt_time}"
+        for r in sample.itertuples(index=False)
+    )
+    return [
+        f"{n} signals have confirmation bar more than {max_gap_mins} min "
+        f"after sw2 (or not after it): {rows}"
+    ]
+
+
 # ── [v8.2] STALENESS CHECK ────────────────────────────────────────────────────
 def sw1_is_fresh(t1, t2):
     """
@@ -972,7 +1024,13 @@ def run(es_path, nq_path):
             conf_bar_idx = c['sw2_conf_idx'] + 1
             if conf_bar_idx >= len(sdf):
                 continue  # confirmation bar has not closed yet
-            entry_price = round(float(sdf.iloc[conf_bar_idx][f'close_{instr_l}']), 2)
+            conf_row = sdf.iloc[conf_bar_idx]
+            # sdf index+1 is not always +1 minute (session-window gap).
+            # Do not price a market entry on a bar hours after sw2.
+            if not confirmation_bar_is_contiguous(c['sw2_conf_time'], conf_row['et']):
+                stale_filtered += 1
+                continue
+            entry_price = round(float(conf_row[f'close_{instr_l}']), 2)
 
             pre_fvg = find_preexisting_fvg(
                 sdf, conf_bar_idx, direction, instr, PRE_FVG_LOOKBACK, entry_price
@@ -1044,7 +1102,6 @@ def run(es_path, nq_path):
             # not the outer-loop scan bar i. Cached candidates can still be
             # sitting in the pool many bars later; using row['et'] would
             # stamp a later, unrelated bar as the signal time.
-            conf_row = sdf.iloc[conf_bar_idx]
             signal = {
                 'smt_time':   conf_row['et'],
                 'date':       conf_row['date'],
@@ -1122,6 +1179,7 @@ if __name__ == '__main__':
     print(f"sw2 candidates:   last {SW2_CANDIDATES} swings (same day)")
     print(f"Parallel sw1 tol: {SW1_PARALLEL_TOL_MINS} mins")
     print(f"sw2 staleness:    {SW2_STALENESS_MINS_1M} mins (1m) / {SW2_STALENESS_BARS_5M} bars (5m)")
+    print(f"conf-bar max gap: {MAX_CONF_GAP_MINS} mins (drop session-window jumps)")
     print(f"Dedup:            by sw2_conf_time (not 30-min bucket)  [v8.7]")
     print(f"FVG search from:  sw2 confirmation bar (not signal bar)  [v8.7]")
     print(f"ES_FVG_MIN:       {ES_FVG_MIN}pt  [v8.7 lowered from 1.0]")

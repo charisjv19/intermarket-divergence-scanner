@@ -17,6 +17,11 @@ alwaysApply: true
 - `smt_time` must be the confirmation-bar timestamp (`sw2_conf_idx + 1`),
   not the outer-loop scan bar `i`. Cached candidates can be re-emitted
   many bars later; stamping `row['et']` would attach a later, unrelated bar.
+- Confirmation (`sw2_conf_idx + 1`) must be within `MAX_CONF_GAP_MINS` of
+  `sw2_conf_time`. `sdf` is session + pre_session only, so index+1 can
+  jump across a session gap (14:29 → next 07:30). Those signals must be
+  dropped, not priced on the distant bar. Piece 3 must fail any output
+  row that violates this (`check_sw2_confirmation_gap`).
 - Signal dedup must be based on `sw2_conf_time` within a 30-min session bucket,
   per direction per instrument, to prevent duplicate signals.
 - SMT divergence must be measured on **wicks**, at structural
