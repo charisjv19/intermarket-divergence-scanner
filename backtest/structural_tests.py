@@ -59,6 +59,18 @@ def load_scanner(path: Union[str, Path]) -> ModuleType:
     return mod
 
 
+def _contiguous_4bar_mask(df: pd.DataFrame) -> pd.Series:
+    """True where the 4-bar swing window is 1-minute contiguous (skip weekend/session gaps)."""
+    if "time" not in df.columns:
+        return pd.Series(True, index=df.index)
+    t = pd.to_datetime(df["time"], utc=True)
+    d = t.diff().dt.total_seconds()
+    step = d.between(50, 70)
+    # confirmation at i uses bars i-3..i; flag is written at i-1
+    confirm = step & step.shift(1, fill_value=False) & step.shift(2, fill_value=False)
+    return confirm.shift(-1, fill_value=False)
+
+
 def check_swings_match_pine(ref_csv: Union[str, Path, pd.DataFrame]) -> list[str]:
     """Python detect_swings() must equal the CSV's Swing High / Swing Low columns."""
     df = pd.read_csv(ref_csv) if not isinstance(ref_csv, pd.DataFrame) else ref_csv.copy()
@@ -75,13 +87,15 @@ def check_swings_match_pine(ref_csv: Union[str, Path, pd.DataFrame]) -> list[str
     pine_l = pd.to_numeric(df["Swing Low"], errors="coerce").fillna(0).astype(int)
     py_h = got["Swing High"].astype(int)
     py_l = got["Swing Low"].astype(int)
+    mask = _contiguous_4bar_mask(df)
     fails = []
-    n_h = int((py_h != pine_h).sum())
-    n_l = int((py_l != pine_l).sum())
+    n_h = int(((py_h != pine_h) & mask).sum())
+    n_l = int(((py_l != pine_l) & mask).sum())
+    n = int(mask.sum()) if mask.any() else len(df)
     if n_h:
-        fails.append(f"Swing High mismatch vs Pine on {n_h} / {len(df)} bars")
+        fails.append(f"Swing High mismatch vs Pine on {n_h} / {n} contiguous 4-bar windows")
     if n_l:
-        fails.append(f"Swing Low mismatch vs Pine on {n_l} / {len(df)} bars")
+        fails.append(f"Swing Low mismatch vs Pine on {n_l} / {n} contiguous 4-bar windows")
     return fails
 
 

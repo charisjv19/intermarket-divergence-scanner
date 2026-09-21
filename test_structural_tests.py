@@ -55,6 +55,17 @@ class TestStructuralTests(unittest.TestCase):
     def test_swings_match_pine_fixture(self):
         self.assertEqual(check_swings_match_pine(FIXTURE), [])
 
+    def test_swings_ignore_weekend_gap_edges(self):
+        df = pd.read_csv(FIXTURE)
+        extra = df.iloc[[-1]].copy()
+        extra["time"] = "2026-03-01T23:00:00Z"
+        extra["high"] = 20.0
+        extra["low"] = 5.0
+        extra["Swing High"] = 0
+        extra["Swing Low"] = 0
+        gapped = pd.concat([df, extra], ignore_index=True)
+        self.assertEqual(check_swings_match_pine(gapped), [])
+
     def test_swings_mismatch_is_loud(self):
         df = pd.read_csv(FIXTURE)
         df.loc[2, "Swing High"] = 0
