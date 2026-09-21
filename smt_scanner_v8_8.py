@@ -31,6 +31,9 @@ Fixes applied in this file:
     classify_bar(). combined_15m_bias and smt5m_status are evaluated
     as of the confirmation clock (sw2+1 min for SMT_IN_FVG; FVG bar
     for FVG_AFTER_SMT), not the outer scan bar i.
+    ES/NQ 1m bars are inner-joined on timestamp; a minute missing on
+    either side is dropped from both, never filled. 5m/15m resample
+    uses that same intersection.
     SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
@@ -115,6 +118,25 @@ SESSIONS = [('NY Morning',8,0,10,30),('NY Afternoon',13,0,15,0)]
 
 
 # ── LOAD ──────────────────────────────────────────────────────────────────────
+def exclusive_bar_times(es_times, nq_times):
+    """Timestamps present on only one instrument. Empty pair = aligned."""
+    es_i = pd.DatetimeIndex(pd.to_datetime(es_times, utc=True)).unique()
+    nq_i = pd.DatetimeIndex(pd.to_datetime(nq_times, utc=True)).unique()
+    return es_i.difference(nq_i), nq_i.difference(es_i)
+
+
+def merge_es_nq_1m(es, nq):
+    """Strict inner join on UTC bar time. Missing minutes are dropped, never filled."""
+    merged = pd.merge(es, nq, on='time', how='inner', suffixes=('_es', '_nq'))
+    merged = merged.sort_values('time').reset_index(drop=True)
+    if merged[['close_es', 'close_nq']].isna().any().any():
+        raise ValueError(
+            'ES/NQ merge produced NaN closes; a missing-bar minute must be '
+            'dropped, not filled or assumed'
+        )
+    return merged
+
+
 def load(es_path, nq_path):
     es = pd.read_csv(es_path)
     nq = pd.read_csv(nq_path)
@@ -122,8 +144,7 @@ def load(es_path, nq_path):
         df['time']       = pd.to_datetime(df['time'], utc=True)
         df['Swing High'] = pd.to_numeric(df['Swing High'], errors='coerce').fillna(0)
         df['Swing Low']  = pd.to_numeric(df['Swing Low'],  errors='coerce').fillna(0)
-    merged = pd.merge(es, nq, on='time', suffixes=('_es','_nq'))
-    merged = merged.sort_values('time').reset_index(drop=True)
+    merged = merge_es_nq_1m(es, nq)
     merged['et']     = merged['time'].dt.tz_convert('America/New_York')
     merged['hour']   = merged['et'].dt.hour
     merged['minute'] = merged['et'].dt.minute
@@ -133,11 +154,15 @@ def load(es_path, nq_path):
 
 # ── [v8.3] RESAMPLE TO 15M AND [v8.4] 5M ─────────────────────────────────────
 def resample_to_15m_and_5m(es_path, nq_path):
-    """Build 15m and 5m OHLC bars for ES and NQ from the same 1m CSVs."""
+    """Build 15m and 5m OHLC bars for ES and NQ from the same 1m CSVs.
+
+    Resample only minutes present in BOTH instruments (same inner-join
+    rule as load()). A 1m hole is not filled before aggregation.
+    """
     def load_one(path):
         df = pd.read_csv(path)
         df['time'] = pd.to_datetime(df['time'], utc=True)
-        return df.sort_values('time').set_index('time')
+        return df.sort_values('time').drop_duplicates(subset='time').set_index('time')
 
     def resample(df, rule):
         ohlc = df[['open','high','low','close']].resample(
@@ -148,6 +173,9 @@ def resample_to_15m_and_5m(es_path, nq_path):
 
     es = load_one(es_path)
     nq = load_one(nq_path)
+    shared = es.index.intersection(nq.index)
+    es = es.loc[shared]
+    nq = nq.loc[shared]
     return resample(es, '15min'), resample(nq, '15min'), resample(es, '5min'), resample(nq, '5min')
 
 

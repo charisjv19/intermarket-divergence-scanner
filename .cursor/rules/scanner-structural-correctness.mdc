@@ -10,6 +10,11 @@ alwaysApply: true
   zero tolerance, same bar only. Never loosen this to a ±N minute tolerance,
   even to raise signal count. (This is defect **S3** — see the v8.8 audit-scope
   rule for its audit ID and current fix status.)
+- ES/NQ 1-minute bars are aligned by **strict inner join on timestamp**.
+  A minute present on only one instrument is dropped from both. Never
+  forward-fill, outer-join, or otherwise assume a missing bar on either
+  side. 5m/15m resample must use that same intersection, not each CSV
+  independently.
 - FVG search must start from `sw2_conf_idx`, not from the signal bar.
 
 ## Entry-type timing — two protocols, do not mix them
