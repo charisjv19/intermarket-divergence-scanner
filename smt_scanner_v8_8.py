@@ -28,7 +28,9 @@ Fixes applied in this file:
     find_fvg 3-bar windows (j-1, j, j+1) must be consecutive 1-minute
     bars; a session-gap triplet is rejected, not used as a 50% entry.
     fvg_in_session() uses the same SESSION_CUTOFF_MINS window as
-    classify_bar().
+    classify_bar(). combined_15m_bias and smt5m_status are evaluated
+    as of the confirmation clock (sw2+1 min for SMT_IN_FVG; FVG bar
+    for FVG_AFTER_SMT), not the outer scan bar i.
     SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
@@ -1059,46 +1061,7 @@ def run(es_path, nq_path):
         _last_sh_e_len = len(sh_e_hist); _last_sl_e_len = len(sl_e_hist)
         _last_sh_n_len = len(sh_n_hist); _last_sl_n_len = len(sl_n_hist)
 
-        # ── [v8.3] 15M MACRO FILTER + FVG SEARCH ──────────────────────────────
-        # Compute macro bias ONCE per 15-min bucket (bias only changes when new 15m bar closes)
-        if candidates:
-            bucket_key = row['et'].floor('15min')
-            if bucket_key in _macro_cache:
-                es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail = _macro_cache[bucket_key]
-            else:
-                es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail = get_15m_macro_bias(es15, nq15, row['et'])
-                _macro_cache[bucket_key] = (es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail)
-        else:
-            es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail = (None, None, None, None)
-
         for c in candidates:
-            # [v8.3] Block unless combined bias agrees with trade direction
-            # Allowed: BULLISH / BULLISH (SLOWING) for LONG
-            # Allowed: BEARISH / BEARISH (SLOWING) for SHORT
-            # Blocked: TRANSITIONAL, CONFLICTED, UNCLEAR
-            expected_dir = 'BULLISH' if c['direction']=='LONG' else 'BEARISH'
-            if expected_dir not in combined_bias_15m:
-                mac_filtered += 1
-                continue
-
-            # [v8.4] 5m SMT CONFLUENCE check (cached per 5-min bucket)
-            cache_key = (row['et'].floor('5min'), c['direction'])
-            if cache_key in _smt5m_cache:
-                smt5m = _smt5m_cache[cache_key]
-            else:
-                smt5m = check_5m_smt_confluence(es5, nq5, row['et'], c['direction'])
-                _smt5m_cache[cache_key] = smt5m
-            if SMT_5M_MODE == 'strict':
-                # Strict mode: require agreeing 5m SMT
-                if smt5m['status'] != 'agree':
-                    smt5m_filtered += 1
-                    continue
-            else:
-                # Lenient mode: block only on opposing or conflicted
-                if smt5m['status'] in ('oppose','conflicted'):
-                    smt5m_filtered += 1
-                    continue
-
             direction = c['direction']
             instr     = c['instrument']
             instr_l   = instr.lower()
@@ -1191,6 +1154,37 @@ def run(es_path, nq_path):
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
                 clock_row = fvg_row
+
+            # 15m bias + 5m confluence as of the confirmation clock, not scan i.
+            # SMT_IN_FVG: sw2_conf_time + 1 minute. FVG_AFTER_SMT: FVG bar.
+            clock_et = clock_row['et']
+            bucket_key = pd.Timestamp(clock_et).floor('15min')
+            if bucket_key in _macro_cache:
+                es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail = _macro_cache[bucket_key]
+            else:
+                es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail = get_15m_macro_bias(
+                    es15, nq15, clock_et
+                )
+                _macro_cache[bucket_key] = (es_bias_15m, nq_bias_15m, combined_bias_15m, bias_detail)
+            expected_dir = 'BULLISH' if direction == 'LONG' else 'BEARISH'
+            if expected_dir not in combined_bias_15m:
+                mac_filtered += 1
+                continue
+
+            cache_key = (pd.Timestamp(clock_et).floor('5min'), direction)
+            if cache_key in _smt5m_cache:
+                smt5m = _smt5m_cache[cache_key]
+            else:
+                smt5m = check_5m_smt_confluence(es5, nq5, clock_et, direction)
+                _smt5m_cache[cache_key] = smt5m
+            if SMT_5M_MODE == 'strict':
+                if smt5m['status'] != 'agree':
+                    smt5m_filtered += 1
+                    continue
+            else:
+                if smt5m['status'] in ('oppose', 'conflicted'):
+                    smt5m_filtered += 1
+                    continue
 
             # SMT_IN_FVG clock = confirmation bar (sw2 + 1 minute).
             # FVG_AFTER_SMT clock = FVG-formation bar. Never the scan bar i.

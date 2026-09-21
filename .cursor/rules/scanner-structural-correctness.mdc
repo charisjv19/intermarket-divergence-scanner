@@ -108,9 +108,9 @@ strictly before the FVG bar.
 - Cached candidates re-evaluated many bars later must not pick up a later
   15m bucket or 5m confluence state.
 
-**Known mismatch (flagged, not fixed in this pass):** both fields are
-currently keyed off `row['et']` (scan `i`) and cached on that bar's
-15m/5m floor.
+**Fixed:** both fields (and the filters that use them) are keyed off
+the confirmation clock (`clock_row['et']`: sw2+1 minute for SMT_IN_FVG,
+FVG-formation bar for FVG_AFTER_SMT), not `row['et']`.
 
 ## Dedup
 

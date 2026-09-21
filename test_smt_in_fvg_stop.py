@@ -111,5 +111,16 @@ class SmtTimeAnchorTests(unittest.TestCase):
         self.assertIn("'smt_time':   clock_row['et']", src)
 
 
+class ConfluenceClockTests(unittest.TestCase):
+    def test_macro_and_5m_use_clock_row_not_scan_row(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        self.assertNotIn("get_15m_macro_bias(es15, nq15, row['et'])", src)
+        self.assertNotIn("check_5m_smt_confluence(es5, nq5, row['et']", src)
+        self.assertIn("es15, nq15, clock_et", src)
+        self.assertIn("check_5m_smt_confluence(es5, nq5, clock_et, direction)", src)
+        self.assertIn("clock_et = clock_row['et']", src)
+
+
 if __name__ == '__main__':
     unittest.main()
