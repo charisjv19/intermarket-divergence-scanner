@@ -7,8 +7,9 @@ alwaysApply: true
 # Fill simulator (`backtest/simulate_fills.py`)
 
 Walks real 1-minute OHLC from each v8.8 signal. Outcomes are `win`,
-`loss`, `no_fill`, and `no_fill_by_eod`. `realized_R` comes from the
-simulated exit, **not** from `target_R`. Do not invent a fill.
+`loss`, `no_fill_never_traded`, `no_fill_timeout`, `no_fill_50pct`,
+and `no_fill_by_eod`. `realized_R` comes from the simulated exit,
+**not** from `target_R`. Do not invent a fill.
 
 SMT_IN_FVG is a market fill at the confirmation-bar **close**. That
 bar's high/low already printed, so stop/target checks start on the
@@ -37,43 +38,44 @@ target-first to improve historical R.
 
 These two cancels are **stated rules from Juliana's own 8.7-era
 trading notes**, not arbitrary simulator knobs. A later cleanup must
-not drop them because they look like extra filters. Cancel is
-`no_fill` (the limit never traded; do not fake a fill).
+not drop them because they look like extra filters. Do not fake a fill.
 
-1. **Time:** if the limit is not filled within **20 minutes** of the
-   FVG identification bar (`fvg_bar`), cancel.
-2. **Price:** if, before the limit fills, price reaches **50% of the
-   distance to `take_profit`**, cancel. The setup has already moved
-   toward the target without filling the limit; chasing it is not the
-   rule.
+1. **Time (`no_fill_timeout`):** if the limit is not filled within
+   **20 minutes** of the FVG identification bar (`fvg_bar`), cancel.
+   The bar at elapsed == 20 minutes is already too late, even if that
+   bar would have traded the limit.
+2. **Price (`no_fill_50pct`):** if, before the limit fills, price
+   reaches **50% of the distance to `take_profit`** (bar high for
+   LONG, bar low for SHORT), cancel. The setup has already moved
+   toward the target without filling the limit; chasing it is not
+   the rule.
 
-Current `simulate_fills.py` still walks an unfilled limit until
-session end. That is an implementation gap against this spec, not a
-decision to abandon the notes. Implement the two cancels; do not
-delete them from this file.
+If the limit is never reached at all before session end (and the
+20-minute mark never arrives), that is `no_fill_never_traded`. Do
+not lump timeout / 50% / never-traded into a single `no_fill`.
+
+Same-bar: if the limit fills on a bar that also prints the 50%
+level, take the fill (the 50% cancel is only while unfilled).
 
 ## Session-end handling
 
 Default: a filled trade that hits neither stop nor target by session
 close is `no_fill_by_eod`, flattened at that last in-window bar's
 close. Scanner session windows: NY Morning 08:00–10:30 ET, NY
-Afternoon 13:00–15:00 ET. `session_end_utc()` currently always uses
-those two closes.
+Afternoon 13:00–15:00 ET. `session_end_utc()` always uses those two
+closes — it is the unfilled-limit wait cap and the default flatten.
 
 **NY Morning exception (stated rule):** a trade **entered after
-09:45 ET** closes at **11:00 ET** instead of the normal 10:30 NY
-Morning cutoff. The extra half-hour is only for late morning entries
-that would otherwise have almost no time to work.
+09:45 ET** (`flatten_end_utc`) closes at **11:00 ET** instead of the
+normal 10:30 NY Morning cutoff. "Entered" is the fill bar (confirmation
+close for SMT_IN_FVG; limit-fill bar for FVG_AFTER_SMT). 09:45 itself
+is not after 09:45 and still flattens at 10:30.
 
 **This extended cutoff does not apply to NY Afternoon signals.**
 Afternoon remains 15:00. There is no analogue (no "entered after
-14:15, close at 15:30"). 09:45 and 11:00 are morning clock times;
-`session_end_utc()` has no afternoon extension either. Do not copy
-the 11:00 exception onto afternoon trades.
-
-Current `simulate_fills.py` does not yet implement the 09:45→11:00
-morning exception (every NY Morning trade still ends at 10:30). Same
-as the limit cancels: spec stands; code is behind.
+14:15, close at 15:30"). Do not copy the 11:00 exception onto
+afternoon trades. Unfilled limits never wait past the normal
+session close, even in the morning.
 
 ## Known gaps — disclose on every report
 

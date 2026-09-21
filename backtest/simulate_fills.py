@@ -5,13 +5,17 @@ Walks real 1-min OHLC from each signal and records which level is
 touched first (bar high/low, not close). Does not use target_R.
 
 Outcomes:
-  win            — take_profit touched first
-  loss           — stop_loss touched first
-  no_fill        — FVG_AFTER_SMT limit never traded (do not fake a fill)
-  no_fill_by_eod — filled, but neither SL nor TP by session end
+  win                  — take_profit touched first
+  loss                 — stop_loss touched first
+  no_fill_never_traded — FVG_AFTER_SMT limit never reached the price
+  no_fill_timeout      — limit unfilled 20 minutes after fvg_bar
+  no_fill_50pct        — price ran 50% of the way to TP before the limit filled
+  no_fill_by_eod       — filled, but neither SL nor TP by flatten time
 
 Same-bar SL and TP: stop first (conservative). Session windows match
 the scanner: NY Morning 8:00–10:30 ET, NY Afternoon 1:00–3:00 PM ET.
+NY Morning trades entered after 09:45 ET flatten at 11:00, not 10:30.
+Afternoon flatten stays 15:00. FVG_AFTER_SMT cancels: Juliana 8.7 notes.
 """
 
 from __future__ import annotations
@@ -27,7 +31,18 @@ import pandas as pd
 ET = ZoneInfo("America/New_York")
 SESSIONS = [("NY Morning", 8, 0, 10, 30), ("NY Afternoon", 13, 0, 15, 0)]
 LIMIT_TYPES = {"FVG_AFTER_SMT"}
+LIMIT_FILL_MINUTES = 20
+LIMIT_CANCEL_TP_FRAC = 0.5
+MORNING_EXTEND_AFTER = time(9, 45)
+MORNING_EXTEND_END = time(11, 0)
 OUTPUT_COLS = ["outcome", "exit_price", "exit_time", "realized_R"]
+
+GAP_DISCLOSURE = (
+    "Fill-simulator known gaps (must disclose on every report):\n"
+    "  - partial exits NOT simulated (no codified rule exists)\n"
+    "  - concurrent-trade limits NOT enforced (policy undecided)\n"
+    "  - 5m-opposing-SMT blocking NOT implemented (evidence-gathering stage)"
+)
 
 
 def _to_utc(ts) -> pd.Timestamp:
@@ -55,6 +70,7 @@ def prepare_bars(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def session_end_utc(session: str, when) -> pd.Timestamp:
+    """Normal session close: NY Morning 10:30, NY Afternoon 15:00. No 11:00 here."""
     et = _to_et(when)
     d = et.date()
     for name, _sh, _sm, eh, em in SESSIONS:
@@ -64,6 +80,19 @@ def session_end_utc(session: str, when) -> pd.Timestamp:
     # unknown session label: end at afternoon close that day
     end = datetime.combine(d, time(15, 0), tzinfo=ET)
     return pd.Timestamp(end).tz_convert("UTC")
+
+
+def flatten_end_utc(session: str, entry_when) -> pd.Timestamp:
+    """Flatten time for a filled trade.
+
+    NY Morning entered after 09:45 ET → 11:00 that day.
+    Does not apply to NY Afternoon (always 15:00).
+    """
+    et = _to_et(entry_when)
+    if session == "NY Morning" and et.time() > MORNING_EXTEND_AFTER:
+        end = datetime.combine(et.date(), MORNING_EXTEND_END, tzinfo=ET)
+        return pd.Timestamp(end).tz_convert("UTC")
+    return session_end_utc(session, entry_when)
 
 
 def _risk(entry: float, stop: float) -> float:
@@ -83,6 +112,14 @@ def _limit_filled(direction: str, entry: float, high: float, low: float) -> bool
     if direction == "LONG":
         return float(low) <= float(entry)
     return float(high) >= float(entry)
+
+
+def _ran_50pct_to_tp(direction: str, entry: float, tp: float, high: float, low: float) -> bool:
+    """True if price reached 50% of the entry→TP distance (high/low, not close)."""
+    mid = float(entry) + LIMIT_CANCEL_TP_FRAC * (float(tp) - float(entry))
+    if direction == "LONG":
+        return float(high) >= mid
+    return float(low) <= mid
 
 
 def _touch_on_bar(direction: str, entry: float, stop: float, tp: float, o, h, l) -> Optional[str]:
@@ -171,31 +208,35 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
         raise ValueError("signal needs smt_time (and fvg_bar for FVG_AFTER_SMT when present)")
     start = _to_utc(start_raw)
     session = row["session"] if "session" in row.index and pd.notna(row.get("session")) else ""
-    end = session_end_utc(session, start_raw)
+    session_end = session_end_utc(session, start_raw)
 
-    window = bars[(bars["time"] >= start) & (bars["time"] < end)].reset_index(drop=True)
-    if window.empty:
-        return _empty_result("no_fill" if is_limit else "no_fill_by_eod")
+    wait = bars[(bars["time"] >= start) & (bars["time"] < session_end)].reset_index(drop=True)
+    if wait.empty:
+        return _empty_result("no_fill_never_traded" if is_limit else "no_fill_by_eod")
 
     path: list[dict] = []
     filled = not is_limit
-    fill_i = 0 if filled else None
+    fill_bar = wait.iloc[0] if filled else None
 
     if is_limit:
-        for i, bar in window.iterrows():
+        deadline = start + pd.Timedelta(minutes=LIMIT_FILL_MINUTES)
+        for _, bar in wait.iterrows():
+            if bar["time"] >= deadline:
+                path.append(_bar_step(bar, "cancel_timeout"))
+                return _empty_result("no_fill_timeout", path)
             if _limit_filled(direction, entry, bar["high"], bar["low"]):
                 filled = True
-                fill_i = int(i)
+                fill_bar = bar
                 path.append(_bar_step(bar, "limit_fill"))
                 break
+            if _ran_50pct_to_tp(direction, entry, tp, bar["high"], bar["low"]):
+                path.append(_bar_step(bar, "cancel_50pct"))
+                return _empty_result("no_fill_50pct", path)
             path.append(_bar_step(bar, "waiting_limit"))
         if not filled:
-            return _empty_result("no_fill", path)
-        # Limit can fill mid-bar; check the remainder of the fill bar too.
-        fill_bar = window.iloc[fill_i]
+            return _empty_result("no_fill_never_traded", path)
         hit = _touch_on_bar(direction, entry, stop, tp, fill_bar["open"], fill_bar["high"], fill_bar["low"])
         if hit:
-            # replace the fill marker with the exit on the same bar
             path[-1] = _bar_step(fill_bar, "limit_fill_then_stop" if hit == "loss" else "limit_fill_then_target")
             exit_px = stop if hit == "loss" else tp
             return {
@@ -205,13 +246,13 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
                 "realized_R": _r(entry, stop, exit_px, direction),
                 "path": path,
             }
-        scan = window.iloc[fill_i + 1 :]
     else:
         # SMT_IN_FVG fills at the confirmation-bar CLOSE. That bar's high/low
         # already printed before the close, so SL/TP start on the NEXT bar.
-        fill_bar = window.iloc[0]
         path.append(_bar_step(fill_bar, "market_fill_at_close"))
-        scan = window.iloc[1:] if len(window) else window
+
+    flatten_end = flatten_end_utc(session, fill_bar["time"])
+    scan = bars[(bars["time"] > fill_bar["time"]) & (bars["time"] < flatten_end)].reset_index(drop=True)
 
     last = None
     for _, bar in scan.iterrows():
@@ -222,7 +263,7 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
         path.append(_bar_step(bar, "open"))
 
     if last is None:
-        last = window.iloc[-1]
+        last = fill_bar
     close = float(last["close"])
     if not path or path[-1]["time"] != last["time"] or path[-1]["action"] == "open":
         if path and path[-1]["time"] == last["time"] and path[-1]["action"] == "open":
@@ -292,9 +333,16 @@ def format_path(path: list) -> str:
 
 
 def spot_check_rows(filled: pd.DataFrame, n: int = 10, seed: int = 42) -> pd.DataFrame:
-    """Stratified random sample across win/loss/no_fill/no_fill_by_eod."""
+    """Stratified random sample across resolved and no-fill outcomes."""
     parts = []
-    outcomes = ["win", "loss", "no_fill", "no_fill_by_eod"]
+    outcomes = [
+        "win",
+        "loss",
+        "no_fill_never_traded",
+        "no_fill_timeout",
+        "no_fill_50pct",
+        "no_fill_by_eod",
+    ]
     present = [o for o in outcomes if (filled["outcome"] == o).any()]
     if not present:
         return filled.head(0)
@@ -334,6 +382,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out, index=False)
     print(out["outcome"].value_counts().to_string())
+    print(GAP_DISCLOSURE)
     if args.spot_check:
         sample = spot_check_rows(out, n=args.spot_check, seed=args.seed)
         traces = []
