@@ -33,7 +33,8 @@ Fixes applied in this file:
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
     FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
-    swing that preceded the FVG, floored at the same minimum stop size) and
+    most recent swing whose timestamp is strictly before the FVG bar, looked up
+    on the FVG-bar swing-history snapshot — not the outer scan bar i) and
     TP = 3R.
     New output columns: entry_price, stop_loss, take_profit, target_R.
 
@@ -430,6 +431,19 @@ def get_15m_macro_bias(es15, nq15, signal_et):
 
 
 # ── [v8.5] SWING HISTORY (FULL) ─────────────────────────────────────────────
+def prior_swing_before_timestamp(swing_hist, fvg_time):
+    """Most recent swing whose timestamp is strictly before fvg_time.
+
+    Used for FVG_AFTER_SMT SL. Compare timestamps, not positional sdf
+    indices from a later scan-bar snapshot.
+    """
+    fvg_ts = pd.Timestamp(fvg_time)
+    for s in reversed(swing_hist):
+        if pd.Timestamp(s[2]) < fvg_ts:
+            return s
+    return None
+
+
 def get_swing_history(flags, prices, indices, timestamps):
     """
     Returns a list of accumulated swing history at each bar:
@@ -1150,16 +1164,17 @@ def run(es_path, nq_path):
                     continue  # no post-SMT FVG = no FVG_AFTER_SMT entry
                 entry_price = fvg['entry_50']
 
-                # most recent swing before the FVG formed, on the entry instrument
+                # Re-derive the prior swing at the FVG bar: snapshot as of
+                # that bar, most recent swing timestamp strictly before it.
+                # Do not reuse scan-bar i hist or compare positional sdf idx.
+                fvg_row = sdf.iloc[fvg['fvg_bar_idx']]
                 if instr == 'ES':
-                    swing_hist = sl_e_hist if direction == 'LONG' else sh_e_hist
+                    hist_col = 'sl_es_hist' if direction == 'LONG' else 'sh_es_hist'
                 else:
-                    swing_hist = sl_n_hist if direction == 'LONG' else sh_n_hist
-                prior_swing = None
-                for s in reversed(swing_hist):
-                    if s[1] < fvg['fvg_bar_idx']:
-                        prior_swing = s
-                        break
+                    hist_col = 'sl_nq_hist' if direction == 'LONG' else 'sh_nq_hist'
+                prior_swing = prior_swing_before_timestamp(
+                    fvg_row[hist_col], fvg_row['et']
+                )
 
                 sl_buf = ES_FVG_SL_BUFFER if instr == 'ES' else NQ_FVG_SL_BUFFER
                 min_sl = min_stop_points(instr)
@@ -1175,7 +1190,7 @@ def run(es_path, nq_path):
                 target_R    = FVG_AFTER_SMT_TP_R
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
-                clock_row = sdf.iloc[fvg['fvg_bar_idx']]
+                clock_row = fvg_row
 
             # SMT_IN_FVG clock = confirmation bar (sw2 + 1 minute).
             # FVG_AFTER_SMT clock = FVG-formation bar. Never the scan bar i.

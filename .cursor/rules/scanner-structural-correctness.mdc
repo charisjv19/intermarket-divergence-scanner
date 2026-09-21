@@ -92,9 +92,9 @@ uses the same `SESSION_CUTOFF_MINS` window as `sdf` session bars.
 - Re-derive the lookup **fresh at the FVG bar**, not by reusing an
   earlier scan-bar snapshot.
 
-**Known mismatch (flagged, not fixed in this pass):** SL currently walks
-`sl_*_hist` / `sh_*_hist` from scan bar `i` and keeps the last swing with
-`s[1] < fvg_bar_idx` (positional).
+**Fixed:** SL is re-derived from the FVG-bar swing-history snapshot
+(`sdf` hist at `fvg_bar_idx`) and keeps the last swing with timestamp
+strictly before the FVG bar.
 
 ## Macro bias / 5m confluence clock
 
