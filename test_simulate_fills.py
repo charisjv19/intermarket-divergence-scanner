@@ -172,6 +172,31 @@ class TestSimulateFills(unittest.TestCase):
         self.assertAlmostEqual(out.loc[0, "realized_R"], -1.0)
         self.assertAlmostEqual(out.loc[1, "realized_R"], 2.0)
 
+    def test_smt_in_fvg_ignores_stop_on_confirmation_bar(self):
+        """Fill is the confirmation close. That bar's low already happened."""
+        bars = _bars(
+            [
+                # confirmation bar: low prints through the stop, then closes at entry
+                ("2026-09-17 09:00", 100.2, 100.4, 98.0, 100.0),
+                ("2026-09-17 09:01", 100.0, 103.5, 99.8, 103.2),
+            ]
+        )
+        out = simulate_one(_sig(), bars)
+        self.assertEqual(out["outcome"], "win")
+        self.assertEqual(out["path"][0]["action"], "market_fill_at_close")
+        self.assertEqual(out["path"][-1]["action"], "target")
+
+    def test_path_starts_at_fill_bar(self):
+        bars = _bars(
+            [
+                ("2026-09-17 09:00", 100.0, 100.2, 99.8, 100.0),
+                ("2026-09-17 09:01", 100.0, 100.2, 98.5, 99.0),
+            ]
+        )
+        out = simulate_one(_sig(), bars)
+        self.assertEqual(out["outcome"], "loss")
+        self.assertEqual([s["action"] for s in out["path"]], ["market_fill_at_close", "stop"])
+
 
 if __name__ == "__main__":
     unittest.main()

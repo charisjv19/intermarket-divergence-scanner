@@ -118,12 +118,38 @@ def _touch_on_bar(direction: str, entry: float, stop: float, tp: float, o, h, l)
     return None
 
 
-def _empty_result(outcome: str) -> dict:
+def _empty_result(outcome: str, path: Optional[list] = None) -> dict:
     return {
         "outcome": outcome,
         "exit_price": pd.NA,
         "exit_time": pd.NaT,
         "realized_R": float("nan"),
+        "path": path or [],
+    }
+
+
+def _bar_step(bar, action: str) -> dict:
+    et = bar["et"] if "et" in bar.index else _to_et(bar["time"])
+    return {
+        "time": bar["time"],
+        "et": et,
+        "open": float(bar["open"]),
+        "high": float(bar["high"]),
+        "low": float(bar["low"]),
+        "close": float(bar["close"]),
+        "action": action,
+    }
+
+
+def _hit_result(hit: str, entry: float, stop: float, tp: float, direction: str, bar, path: list) -> dict:
+    exit_px = stop if hit == "loss" else tp
+    path.append(_bar_step(bar, "stop" if hit == "loss" else "target"))
+    return {
+        "outcome": hit,
+        "exit_price": exit_px,
+        "exit_time": bar["time"],
+        "realized_R": _r(entry, stop, exit_px, direction),
+        "path": path,
     }
 
 
@@ -151,6 +177,7 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
     if window.empty:
         return _empty_result("no_fill" if is_limit else "no_fill_by_eod")
 
+    path: list[dict] = []
     filled = not is_limit
     fill_i = 0 if filled else None
 
@@ -159,24 +186,31 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
             if _limit_filled(direction, entry, bar["high"], bar["low"]):
                 filled = True
                 fill_i = int(i)
+                path.append(_bar_step(bar, "limit_fill"))
                 break
+            path.append(_bar_step(bar, "waiting_limit"))
         if not filled:
-            return _empty_result("no_fill")
-        # Market SMT_IN_FVG fills at the confirmation close: SL/TP from the next bar.
+            return _empty_result("no_fill", path)
         # Limit can fill mid-bar; check the remainder of the fill bar too.
         fill_bar = window.iloc[fill_i]
         hit = _touch_on_bar(direction, entry, stop, tp, fill_bar["open"], fill_bar["high"], fill_bar["low"])
         if hit:
+            # replace the fill marker with the exit on the same bar
+            path[-1] = _bar_step(fill_bar, "limit_fill_then_stop" if hit == "loss" else "limit_fill_then_target")
             exit_px = stop if hit == "loss" else tp
             return {
                 "outcome": hit,
                 "exit_price": exit_px,
                 "exit_time": fill_bar["time"],
                 "realized_R": _r(entry, stop, exit_px, direction),
+                "path": path,
             }
         scan = window.iloc[fill_i + 1 :]
     else:
-        # Fill at close of the start bar; path after that close is the next bar.
+        # SMT_IN_FVG fills at the confirmation-bar CLOSE. That bar's high/low
+        # already printed before the close, so SL/TP start on the NEXT bar.
+        fill_bar = window.iloc[0]
+        path.append(_bar_step(fill_bar, "market_fill_at_close"))
         scan = window.iloc[1:] if len(window) else window
 
     last = None
@@ -184,22 +218,23 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
         last = bar
         hit = _touch_on_bar(direction, entry, stop, tp, bar["open"], bar["high"], bar["low"])
         if hit:
-            exit_px = stop if hit == "loss" else tp
-            return {
-                "outcome": hit,
-                "exit_price": exit_px,
-                "exit_time": bar["time"],
-                "realized_R": _r(entry, stop, exit_px, direction),
-            }
+            return _hit_result(hit, entry, stop, tp, direction, bar, path)
+        path.append(_bar_step(bar, "open"))
 
     if last is None:
         last = window.iloc[-1]
     close = float(last["close"])
+    if not path or path[-1]["time"] != last["time"] or path[-1]["action"] == "open":
+        if path and path[-1]["time"] == last["time"] and path[-1]["action"] == "open":
+            path[-1]["action"] = "flatten_eod"
+        else:
+            path.append(_bar_step(last, "flatten_eod"))
     return {
         "outcome": "no_fill_by_eod",
         "exit_price": close,
         "exit_time": last["time"],
         "realized_R": _r(entry, stop, close, direction),
+        "path": path,
     }
 
 
@@ -243,6 +278,43 @@ def simulate_fills(
     return sigs
 
 
+def format_path(path: list) -> str:
+    """One line per bar: ET time  O/H/L/C  action."""
+    lines = []
+    for step in path:
+        et = pd.Timestamp(step["et"]).tz_convert(ET)
+        lines.append(
+            f"  {et.strftime('%Y-%m-%d %H:%M %Z')}  "
+            f"O={step['open']:.2f} H={step['high']:.2f} "
+            f"L={step['low']:.2f} C={step['close']:.2f}  {step['action']}"
+        )
+    return "\n".join(lines) if lines else "  (no bars in session window)"
+
+
+def spot_check_rows(filled: pd.DataFrame, n: int = 10, seed: int = 42) -> pd.DataFrame:
+    """Stratified random sample across win/loss/no_fill/no_fill_by_eod."""
+    parts = []
+    outcomes = ["win", "loss", "no_fill", "no_fill_by_eod"]
+    present = [o for o in outcomes if (filled["outcome"] == o).any()]
+    if not present:
+        return filled.head(0)
+    per = max(1, n // len(present))
+    leftover = n
+    for o in present:
+        grp = filled[filled["outcome"] == o]
+        take = min(len(grp), per, leftover)
+        if take:
+            parts.append(grp.sample(n=take, random_state=seed))
+            leftover -= take
+    if leftover > 0:
+        used = pd.concat(parts).index if parts else []
+        rest = filled.drop(index=used, errors="ignore")
+        if len(rest):
+            parts.append(rest.sample(n=min(leftover, len(rest)), random_state=seed))
+    out = pd.concat(parts) if parts else filled.head(0)
+    return out.sample(frac=1, random_state=seed).head(n)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Simulate fills on 1-min bars for a signal CSV.")
     p.add_argument("--signals", required=True)
@@ -250,15 +322,50 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--es-bars")
     p.add_argument("--nq-bars")
     p.add_argument("--out", required=True)
+    p.add_argument("--spot-check", type=int, default=0, help="Print N stratified traces")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--spot-out", help="Write spot-check traces to this text file")
     args = p.parse_args(argv)
     es = pd.read_csv(args.es_bars) if args.es_bars else None
     nq = pd.read_csv(args.nq_bars) if args.nq_bars else None
     bars = pd.read_csv(args.bars) if args.bars else None
-    out = simulate_fills(args.signals, bars, es_bars=es, nq_bars=nq)
+    sigs = pd.read_csv(args.signals)
+    out = simulate_fills(sigs, bars, es_bars=es, nq_bars=nq)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out, index=False)
     print(out["outcome"].value_counts().to_string())
+    if args.spot_check:
+        sample = spot_check_rows(out, n=args.spot_check, seed=args.seed)
+        traces = []
+        es_p = prepare_bars(es) if es is not None else None
+        nq_p = prepare_bars(nq) if nq is not None else None
+        bars_p = prepare_bars(bars) if bars is not None else None
+        for idx, row in sample.iterrows():
+            b = _bars_for_instrument(row.get("instrument", "ES"), bars_p, es_p, nq_p)
+            traced = simulate_one(row, b)
+            traces.append(_format_spot(idx, row, traced))
+        text = "\n\n".join(traces)
+        print("\n" + text)
+        if args.spot_out:
+            Path(args.spot_out).write_text(text + "\n")
     return 0
+
+
+def _format_spot(idx, row, traced: dict) -> str:
+    r = traced["realized_R"]
+    r_s = "nan" if pd.isna(r) else f"{float(r):.3f}"
+    exit_t = traced["exit_time"]
+    exit_s = "" if pd.isna(exit_t) else str(pd.Timestamp(exit_t).tz_convert(ET))
+    exit_px = traced["exit_price"]
+    px_s = "" if pd.isna(exit_px) else f"{float(exit_px):.2f}"
+    header = (
+        f"#{idx} {row.get('smt_time')} {row.get('session')} "
+        f"{row.get('direction')} {row.get('instrument')} {row.get('entry_type')}\n"
+        f"  entry={float(row['entry_price']):.2f}  stop={float(row['stop_loss']):.2f}  "
+        f"target={float(row['take_profit']):.2f}\n"
+        f"  outcome={traced['outcome']}  exit_price={px_s}  exit_time={exit_s}  realized_R={r_s}"
+    )
+    return header + "\n" + format_path(traced.get("path") or [])
 
 
 if __name__ == "__main__":
