@@ -574,6 +574,7 @@ def render_pnl_report(
     filled_v87: pd.DataFrame,
     filled_v88: pd.DataFrame,
     inverted_n: int,
+    tape_label: str = "Feb–Apr ES/NQ",
 ) -> str:
     i87 = index_by_identity(filled_v87)
     i88 = index_by_identity(filled_v88)
@@ -605,7 +606,7 @@ def render_pnl_report(
         GAP_DISCLOSURE,
         "",
         "=" * 72,
-        "PART A/B/C — v8.7 reconstructed vs v8.8 head (Feb–Apr ES/NQ)",
+        f"PART A/B/C — v8.7 reconstructed vs v8.8 head ({tape_label})",
         "=" * 72,
         RECONSTRUCTION_LABEL,
         STOP_RULE_FLAG,
@@ -626,7 +627,7 @@ def render_pnl_report(
         "",
         "-" * 72,
         "PART C — P&L by category",
-        "realized_R is fill-simulated on ES_feb_apr.csv / NQ_feb_apr.csv.",
+        f"realized_R is fill-simulated on the same tape as the scans ({tape_label}).",
         "Win rate and expectancy use resolved win/loss only (eod excluded, no-position excluded).",
         "total_R sums realized_R over win + loss + eod flatten (no-position contributes 0).",
         "",
@@ -650,8 +651,8 @@ def render_pnl_report(
         "",
         "-" * 72,
         "AGGREGATE (strategy-level shift)",
-        _metrics_line("v8.7 reconstructed (all 224)", _resolved_metrics(filled_v87)),
-        _metrics_line("v8.8 actual        (all 192)", _resolved_metrics(filled_v88)),
+        _metrics_line(f"v8.7 reconstructed (all {len(i87)})", _resolved_metrics(filled_v87)),
+        _metrics_line(f"v8.8 actual        (all {len(i88)})", _resolved_metrics(filled_v88)),
         f"  net total_R (v8.8 − v8.7 reconstructed): "
         f"{_fmt_r(_r_sum(filled_v88) - _r_sum(filled_v87))}",
         "",
@@ -668,6 +669,7 @@ def run_compare(
     es_bars: pd.DataFrame,
     nq_bars: pd.DataFrame,
     out_dir: Union[str, Path],
+    tape_label: str = "Feb–Apr ES/NQ",
 ) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -696,6 +698,7 @@ def run_compare(
         filled_v87=filled_v87,
         filled_v88=filled_v88,
         inverted_n=inverted_n,
+        tape_label=tape_label,
     )
     report_path = out_dir / "v87_v88_pnl_by_category.txt"
     report_path.write_text(report)
@@ -717,6 +720,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--es-bars", required=True)
     p.add_argument("--nq-bars", required=True)
     p.add_argument("--out-dir", required=True)
+    p.add_argument(
+        "--tape-label",
+        default="Feb–Apr ES/NQ",
+        help="Human label for the bar tape used in the report header.",
+    )
     args = p.parse_args(argv)
     result = run_compare(
         v87_signals=args.v87_signals,
@@ -724,6 +732,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         es_bars=pd.read_csv(args.es_bars),
         nq_bars=pd.read_csv(args.nq_bars),
         out_dir=args.out_dir,
+        tape_label=args.tape_label,
     )
     cats = result["categorized"]
     print(cats["category"].value_counts().reindex(CATEGORIES).fillna(0).astype(int).to_string())
