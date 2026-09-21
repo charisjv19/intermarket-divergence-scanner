@@ -76,6 +76,14 @@ classify session bars when building `sdf`:
 There must not be two different definitions of "in session" in the same
 file.
 
+**Exception — SMT_IN_FVG pre-FVG membership:** a pre-existing FVG whose
+middle bar is `pre_session` (07:30–08:00 / 12:30–13:00) **is valid** for
+the membership check. `find_preexisting_fvg()` must accept session **or**
+pre_session. Do **not** apply `fvg_in_session()` there.
+
+This exception does **not** apply to FVG_AFTER_SMT: `find_fvg()` still
+requires `fvg_in_session()` (session only), plus 3-bar contiguity.
+
 **Fixed:** `fvg_in_session()` is `classify_bar()[0] == 'session'`, so it
 uses the same `SESSION_CUTOFF_MINS` window as `sdf` session bars.
 

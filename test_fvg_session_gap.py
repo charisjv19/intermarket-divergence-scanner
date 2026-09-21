@@ -110,6 +110,84 @@ class Piece3FvgWindowCheckTests(unittest.TestCase):
         self.assertIn('if not fvg_window_is_contiguous(sdf, j):', src)
         body = src.split('def find_fvg(')[1].split('def fmt_ts')[0]
         self.assertIn('fvg_window_is_contiguous', body)
+        self.assertIn('fvg_in_session', body)
+
+
+class Piece3PreSessionPreFvgMembershipTests(unittest.TestCase):
+    """A pre-session-formed FVG is valid SMT_IN_FVG membership.
+
+    FVG_AFTER_SMT / find_fvg stay session-only.
+    """
+
+    def _pre_session_long_fvg_sdf(self):
+        # 07:40/41/42 pre-session LONG FVG (high[07:40] < low[07:42]), then 08:00.
+        times = [
+            _et(2026, 2, 5, 7, 40),
+            _et(2026, 2, 5, 7, 41),
+            _et(2026, 2, 5, 7, 42),
+            _et(2026, 2, 5, 8, 0),
+        ]
+        return pd.DataFrame({
+            'et': times,
+            'high_es': [100.0, 101.0, 102.0, 101.0],
+            'low_es':  [99.5,  100.2, 100.6, 100.2],
+        })
+
+    def test_pre_session_fvg_is_valid_smt_in_fvg_membership(self):
+        from smt_scanner_v8_8 import (
+            find_preexisting_fvg,
+            fvg_in_session,
+            fvg_in_session_or_pre_session,
+        )
+        sdf = self._pre_session_long_fvg_sdf()
+        self.assertFalse(fvg_in_session(sdf.iloc[1]['et']))  # 07:41 pre_session
+        self.assertTrue(fvg_in_session_or_pre_session(sdf.iloc[1]['et']))
+        got = find_preexisting_fvg(
+            sdf, smt_idx=3, direction='LONG', instrument='ES',
+            lookback=30, current_price=100.3,
+        )
+        self.assertIsNotNone(got)
+        self.assertTrue(got['pre_fvg_found'])
+        self.assertEqual(pd.Timestamp(got['pre_fvg_bar']), sdf.iloc[1]['et'])
+        self.assertEqual(got['pre_fvg_low'], 100.0)
+        self.assertEqual(got['pre_fvg_high'], 100.6)
+
+    def test_afternoon_pre_session_fvg_is_also_valid(self):
+        from smt_scanner_v8_8 import find_preexisting_fvg
+        times = [
+            _et(2026, 2, 24, 12, 47),
+            _et(2026, 2, 24, 12, 48),
+            _et(2026, 2, 24, 12, 49),
+            _et(2026, 2, 24, 13, 0),
+        ]
+        sdf = pd.DataFrame({
+            'et': times,
+            'high_es': [100.0, 101.0, 102.0, 101.0],
+            'low_es':  [99.5,  100.2, 100.6, 100.2],
+        })
+        got = find_preexisting_fvg(
+            sdf, smt_idx=3, direction='LONG', instrument='ES',
+            lookback=30, current_price=100.3,
+        )
+        self.assertIsNotNone(got)
+        self.assertEqual(pd.Timestamp(got['pre_fvg_bar']), sdf.iloc[1]['et'])
+
+    def test_find_fvg_still_rejects_pre_session_formation(self):
+        sdf = self._pre_session_long_fvg_sdf()
+        got = find_fvg(
+            sdf, start_idx=0, direction='LONG', instrument='ES',
+            lookahead=15, swept_extreme=90.0,
+        )
+        self.assertFalse(got.get('fvg_found'))
+
+    def test_preexisting_lookup_does_not_use_session_only_cutoff(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        body = src.split('def find_preexisting_fvg(')[1].split('def find_fvg(')[0]
+        self.assertNotIn('if not fvg_in_session(', body)
+        self.assertIn('fvg_in_session_or_pre_session', body)
+        fvg_body = src.split('def find_fvg(')[1].split('def fmt_ts')[0]
+        self.assertIn('fvg_in_session(', fvg_body)
 
 
 if __name__ == '__main__':

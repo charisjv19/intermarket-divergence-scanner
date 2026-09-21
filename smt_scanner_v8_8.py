@@ -28,7 +28,9 @@ Fixes applied in this file:
     find_fvg 3-bar windows (j-1, j, j+1) must be consecutive 1-minute
     bars; a session-gap triplet is rejected, not used as a 50% entry.
     fvg_in_session() uses the same SESSION_CUTOFF_MINS window as
-    classify_bar(). combined_15m_bias and smt5m_status are evaluated
+    classify_bar() for FVG_AFTER_SMT / find_fvg. SMT_IN_FVG pre-FVG
+    membership also accepts a pre-session-formed FVG (07:30–08:00 /
+    12:30–13:00). combined_15m_bias and smt5m_status are evaluated
     as of the confirmation clock (sw2+1 min for SMT_IN_FVG; FVG bar
     for FVG_AFTER_SMT), not the outer scan bar i.
     ES/NQ 1m bars are inner-joined on timestamp; a minute missing on
@@ -313,6 +315,16 @@ def classify_bar(hour, minute):
 def fvg_in_session(et):
     """True iff this bar is a classify_bar() session bar (cutoff applied)."""
     return classify_bar(et.hour, et.minute)[0] == 'session'
+
+
+def fvg_in_session_or_pre_session(et):
+    """True iff this bar is in sdf: session or pre_session.
+
+    SMT_IN_FVG pre-FVG membership allows a gap that formed in
+    pre-session (07:30–08:00 / 12:30–13:00). FVG_AFTER_SMT / find_fvg
+    still require fvg_in_session() (session only).
+    """
+    return classify_bar(et.hour, et.minute)[0] in ('session', 'pre_session')
 
 
 def fvg_window_is_contiguous(sdf, j):
@@ -831,6 +843,9 @@ def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_
     Callers must pass the sw2 confirmation bar (sw2_conf_idx + 1) as smt_idx
     and that bar's close as current_price, so membership matches the market entry.
     The 3-bar window must be consecutive 1-minute bars (same rule as find_fvg).
+    The FVG middle bar may be session or pre_session — a pre-session-formed
+    gap is a valid SMT_IN_FVG membership match. Do not use fvg_in_session()
+    here (that cutoff is for FVG_AFTER_SMT formation only).
     """
     col_h = f'high_{instrument.lower()}'
     col_l = f'low_{instrument.lower()}'
@@ -843,7 +858,7 @@ def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_
         if j-1 < 0 or j+1 >= len(sdf): continue
         if not fvg_window_is_contiguous(sdf, j):
             continue
-        if not fvg_in_session(sdf.iloc[j]['et']):
+        if not fvg_in_session_or_pre_session(sdf.iloc[j]['et']):
             continue
         ph = sdf.iloc[j-1][col_h]; pl = sdf.iloc[j-1][col_l]
         nh = sdf.iloc[j+1][col_h]; nl = sdf.iloc[j+1][col_l]
