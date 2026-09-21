@@ -38,6 +38,29 @@ a failed SMT_IN_FVG confirmation as an automatic FVG_AFTER_SMT.
   scan bar `i`. Cached candidates can be re-emitted many bars later; stamping
   `row['et']` would attach a later, unrelated bar.
 
+#### Pre-existing FVG membership — pre-session structure counts
+
+- A pre-existing FVG that **formed during pre-session** (NY Morning
+  07:30–08:00 / NY Afternoon 12:30–13:00) **is valid** for SMT_IN_FVG's
+  membership check (`find_preexisting_fvg()`). This is a **deliberate
+  strategy decision**, not an oversight: pre-session price structure
+  counts as real structure for this purpose. `find_preexisting_fvg()`
+  must accept a middle bar that is session **or** `pre_session`. Do
+  **not** apply `fvg_in_session()` there.
+- This exemption is **only** the pre-existing-FVG lookup. It does **not**
+  extend pre-session data to:
+  - the 3-bar FVG formation **contiguity** check (`j-1`, `j`, `j+1` must
+    still be consecutive 1-minute bars)
+  - FVG_AFTER_SMT's own FVG search (`find_fvg()` still requires
+    `fvg_in_session()` — session only)
+  - SMT_IN_FVG confirmation-bar timing (still exactly 1 minute after sw2
+    by elapsed timestamp)
+- Fix 1's session-window unification initially over-restricted this by
+  applying `fvg_in_session()` too broadly (inside `find_preexisting_fvg()`
+  as well as `find_fvg()`). That was corrected. Do **not** reintroduce
+  the session-only cutoff on the pre-FVG lookup in a later "cleanup"
+  just because it looks inconsistent with `fvg_in_session()`.
+
 ### FVG_AFTER_SMT — entry is whenever a valid post-SMT FVG forms
 
 - Entry occurs whenever `find_fvg()`'s pattern search locates a valid
@@ -76,16 +99,15 @@ classify session bars when building `sdf`:
 There must not be two different definitions of "in session" in the same
 file.
 
-**Exception — SMT_IN_FVG pre-FVG membership:** a pre-existing FVG whose
-middle bar is `pre_session` (07:30–08:00 / 12:30–13:00) **is valid** for
-the membership check. `find_preexisting_fvg()` must accept session **or**
-pre_session. Do **not** apply `fvg_in_session()` there.
-
-This exception does **not** apply to FVG_AFTER_SMT: `find_fvg()` still
-requires `fvg_in_session()` (session only), plus 3-bar contiguity.
+**SMT_IN_FVG pre-FVG membership is the one exemption** (see the
+confirmation-bar section above): pre-session-formed FVGs count as real
+structure for membership only. `fvg_in_session()` stays session-only
+for FVG_AFTER_SMT / `find_fvg()`. Do not "unify" that away.
 
 **Fixed:** `fvg_in_session()` is `classify_bar()[0] == 'session'`, so it
-uses the same `SESSION_CUTOFF_MINS` window as `sdf` session bars.
+uses the same `SESSION_CUTOFF_MINS` window as `sdf` session bars. Fix 1
+wrongly reused that helper in `find_preexisting_fvg()`; membership now
+uses `fvg_in_session_or_pre_session()`.
 
 ## FVG 3-bar window
 
