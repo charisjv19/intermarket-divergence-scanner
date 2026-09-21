@@ -1,5 +1,5 @@
 ---
-description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, SMT_IN_FVG confirmation-bar anchoring, dedup, wick-based SMT, equal high/low). Always applied.
+description: Structural invariants that must not regress in SMT/FVG detection (timestamp matching, FVG search origin, SMT_IN_FVG vs FVG_AFTER_SMT timing, session windows, FVG_AFTER_SMT SL, confluence clock, dedup, wick-based SMT, equal high/low). Always applied.
 globs:
 alwaysApply: true
 ---
@@ -11,24 +11,123 @@ alwaysApply: true
   even to raise signal count. (This is defect **S3** — see the v8.8 audit-scope
   rule for its audit ID and current fix status.)
 - FVG search must start from `sw2_conf_idx`, not from the signal bar.
-- SMT_IN_FVG's pre-existing FVG check must be anchored to the confirmation
-  bar (`sw2_conf_idx + 1`), not the current scanning bar (`i`), so
-  `entry_price` and FVG membership always reference the same bar.
-- `smt_time` must be the confirmation-bar timestamp (`sw2_conf_idx + 1`),
-  not the outer-loop scan bar `i`. Cached candidates can be re-emitted
-  many bars later; stamping `row['et']` would attach a later, unrelated bar.
-- Confirmation (`sw2_conf_idx + 1`) must be within `MAX_CONF_GAP_MINS` of
-  `sw2_conf_time`. `sdf` is session + pre_session only, so index+1 can
-  jump across a session gap (14:29 → next 07:30). Those signals must be
-  dropped, not priced on the distant bar. Piece 3 must fail any output
-  row that violates this (`check_sw2_confirmation_gap`).
+
+## Entry-type timing — two protocols, do not mix them
+
+`SMT_IN_FVG` and `FVG_AFTER_SMT` have **separate** timing protocols. Do not
+apply SMT_IN_FVG's confirmation-bar rule to FVG_AFTER_SMT, and do not treat
+a failed SMT_IN_FVG confirmation as an automatic FVG_AFTER_SMT.
+
+### SMT_IN_FVG — confirmation is exactly 1 minute after sw2
+
+- Confirmation must occur **exactly 1 minute after `sw2_conf_time`** (the
+  very next real bar). Verify by **elapsed timestamp**, not by a positional
+  `sw2_conf_idx + 1` with a gap ceiling.
+- Any elapsed gap other than exactly 1 minute means the swing's true next
+  bar does not exist in `sdf` (a session boundary). Reject the SMT_IN_FVG
+  candidate **outright**.
+- Do **not** fall back to FVG_AFTER_SMT automatically.
+- Do **not** loosely accept up to `MAX_CONF_GAP_MINS` (currently 5).
+- Pre-existing FVG membership, `entry_price`, and `smt_time` all reference
+  that same confirmation bar (`sw2_conf_time + 1 minute`), not the outer-loop
+  scan bar `i`. Cached candidates can be re-emitted many bars later; stamping
+  `row['et']` would attach a later, unrelated bar.
+
+### FVG_AFTER_SMT — entry is whenever a valid post-SMT FVG forms
+
+- Entry occurs whenever `find_fvg()`'s pattern search locates a valid
+  post-SMT FVG. That can be several bars after sw2, gated by
+  `FVG_LOOKAHEAD` — **not** fixed to sw2 + 1 minute.
+- FVG_AFTER_SMT is constrained only by its own FVG-formation timing
+  (lookahead, 3-bar contiguity, in-session FVG). It is **not** constrained
+  by SMT_IN_FVG's confirmation-bar / `MAX_CONF_GAP_MINS` rule.
+- `smt_time` for FVG_AFTER_SMT is the FVG-formation bar timestamp, not
+  `sw2_conf_idx + 1` and not scan bar `i`.
+
+**Known code bug (flagged, not fixed in this documentation pass):**
+`confirmation_bar_is_contiguous()` / `MAX_CONF_GAP_MINS` currently runs on
+every candidate **before** the `if pre_fvg:` SMT_IN_FVG vs FVG_AFTER_SMT
+branch. That can wrongly reject a valid FVG_AFTER_SMT whose protocol never
+depended on sw2+1 contiguity. A later code pass must apply the exact-1-minute
+confirmation check **only** on the SMT_IN_FVG path.
+
+## Session windows — one canonical definition
+
+`SESSIONS` = NY Morning 08:00–10:30, NY Afternoon 13:00–15:00.
+`SESSION_CUTOFF_MINS = 30`. `sdf` is built from `classify_bar()` results
+that are not `None` (session + pre_session), then `reset_index`, so
+consecutive `sdf` indices are **not** always consecutive minutes.
+
+A bar is **"in session"** only if it survives the same cutoff used to
+classify session bars when building `sdf`:
+
+- session: `ss <= t < se - SESSION_CUTOFF_MINS`
+  (NY Morning 08:00–10:00, NY Afternoon 13:00–14:30)
+- pre_session (in `sdf` for swing context, **not** "in session"):
+  `ss - PRE_SESSION_LOOKBACK_MINS <= t < ss`
+- everything else, including the 30 minutes before each session end
+  (10:00–10:30, 14:30–15:00), is out of session and must not be treated
+  as an in-session bar
+
+`classify_bar()` and `fvg_in_session()` **must both use this cutoff**.
+There must not be two different definitions of "in session" in the same
+file.
+
+**Known mismatch (flagged, not fixed in this pass):** `fvg_in_session()`
+currently uses the raw `SESSIONS` end times (08:00–10:30 / 13:00–15:00)
+with no cutoff, so 10:00–10:30 and 14:30–15:00 count as in-session for
+FVGs while `classify_bar()` / `sdf` session bars exclude them.
+
+## FVG 3-bar window
+
 - A 3-bar FVG (`j-1`, `j`, `j+1`) must be consecutive 1-minute bars.
   `fvg_in_session()` on the middle bar is not enough; `find_fvg` must
   reject any window whose elapsed time is not 1+1 minutes. Piece 3 must
   fail any FVG_AFTER_SMT whose `fvg_bar` spans a session gap
   (`check_fvg_windows_contiguous`).
-- Signal dedup must be based on `sw2_conf_time` within a 30-min session bucket,
-  per direction per instrument, to prevent duplicate signals.
+
+## FVG_AFTER_SMT stop-loss
+
+- SL anchors to the most recent swing low (LONG) or swing high (SHORT)
+  whose **timestamp is strictly before the FVG bar's timestamp**.
+- Do **not** compare a positional `sdf` index against a swing-history
+  snapshot taken at whatever bar the candidate was last evaluated on
+  (the outer-loop scan bar `i`).
+- Re-derive the lookup **fresh at the FVG bar**, not by reusing an
+  earlier scan-bar snapshot.
+
+**Known mismatch (flagged, not fixed in this pass):** SL currently walks
+`sl_*_hist` / `sh_*_hist` from scan bar `i` and keeps the last swing with
+`s[1] < fvg_bar_idx` (positional).
+
+## Macro bias / 5m confluence clock
+
+- `combined_15m_bias` and `smt5m_status` must be evaluated as of the
+  **confirmation bar's timestamp**, not the outer scan loop's current bar
+  `i`. Same principle as the `smt_time` scan-bar bug, extended to these
+  two fields, and respecting the SMT_IN_FVG vs FVG_AFTER_SMT timing
+  distinction above:
+  - SMT_IN_FVG: `sw2_conf_time + 1 minute`
+  - FVG_AFTER_SMT: the FVG-formation bar
+- Cached candidates re-evaluated many bars later must not pick up a later
+  15m bucket or 5m confluence state.
+
+**Known mismatch (flagged, not fixed in this pass):** both fields are
+currently keyed off `row['et']` (scan `i`) and cached on that bar's
+15m/5m floor.
+
+## Dedup
+
+- Dedup on exact `(date, sw2_conf_time, direction, instrument)` identity.
+  Prefer SMT_IN_FVG over FVG_AFTER_SMT when both exist for the same sw2
+  (`keep='first'` after ranking).
+- **Not** a 30-minute `smt_time` bucket. v8.7 abandoned the bucket because
+  the same SMT (identical sw1/sw2) could spawn a new signal each time
+  `smt_time` crossed a 30-min boundary; identity on `sw2_conf_time` fires
+  each unique SMT once.
+
+## Wick SMT / equal high-low
+
 - SMT divergence must be measured on **wicks**, at structural
   swing-marker-tagged points only — never candle bodies or non-structural
   points. (Audit-confirmed as the primary driver of false signals and losses.)
