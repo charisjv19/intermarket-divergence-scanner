@@ -124,12 +124,20 @@ class TestDiffFilled(unittest.TestCase):
 
 
 class TestCompareVersionsE2E(unittest.TestCase):
+    def _serial(self, rows: list[dict]) -> list[dict]:
+        out = []
+        for row in rows:
+            item = dict(row)
+            for k, v in item.items():
+                if isinstance(v, datetime):
+                    item[k] = v.isoformat()
+            out.append(item)
+        return out
+
     def _write_scanner(self, folder: Path, name: str, rows: list[dict]) -> Path:
-        payload = repr(rows)
+        payload = repr(self._serial(rows))
         path = folder / name
         path.write_text(
-            "from datetime import datetime\n"
-            "from zoneinfo import ZoneInfo\n"
             "import pandas as pd\n"
             f"ROWS = {payload}\n"
             "def run(es_path, nq_path):\n"

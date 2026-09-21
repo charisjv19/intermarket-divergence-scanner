@@ -97,7 +97,8 @@ def _id_time(ts) -> str:
 
 
 def _show_time(ts) -> str:
-    return _to_et(ts).strftime("%Y-%m-%d %H:%M:%S%z")
+    # Match this session's manual diffs: "2026-02-13 13:13:00-05:00"
+    return _to_et(ts).isoformat(sep=" ", timespec="seconds")
 
 
 def _show_date(value, sw2) -> str:
