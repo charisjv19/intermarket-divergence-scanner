@@ -1,0 +1,50 @@
+---
+description: v8.7 documented reconstruction (entry_50 limit, 20-tick stop both products, 1.5R/3R) and v8.7-vs-v8.8 identity categories. Apply when reconstructing v8.7 fills or reading v87_v88_categorized_signals.csv.
+globs: backtest/reconstruct_v87.py,backtest/v87_v88_compare.py,test_reconstruct_v87.py,test_v87_v88_compare.py
+alwaysApply: true
+---
+
+# v8.7 reconstruction and v8.7 vs v8.8 categories
+
+v8.7 never stored `entry_price` / `stop_loss` / `take_profit`. Any P&L
+for v8.7 is **reconstructed from the documented formula** and then
+run through `simulate_fills()`. Label it:
+
+> v8.7 RECONSTRUCTED from documented formula and fill-simulated on
+> real data -- not v8.7's original (never-stored) values.
+
+Do not present those levels as original v8.7 output.
+
+## Documented formula (not v8.8 logic)
+
+- **Entry:** limit at `entry_50` for **both** `SMT_IN_FVG` and
+  `FVG_AFTER_SMT`. v8.7's SMT_IN_FVG tag is context; the v8.2
+  docstring says the actual entry is still the post-SMT FVG 50%
+  limit. `simulate_fills()` must be forced onto the limit path
+  (`FVG_AFTER_SMT`) or it will market-fill SMT_IN_FVG at
+  confirmation close.
+- **Stop:** `swept_extreme` ± 20 ticks. Tick = 0.25, so **5.0 pt for
+  ES and NQ**. v8.2–v8.7 scanners contain no stop code; this is the
+  documented rule, not recovered from a column. v8.8 later floors
+  NQ at 40 ticks / 10.0 pt — do not apply that NQ floor here.
+  `swept_extreme` is the confirming-instrument sw2 price (`es_sw2_price`
+  if instrument is ES, else `nq_sw2_price`).
+- **Target:** 3R, or 1.5R when `entry_type` is SMT_IN_FVG (audit
+  Section 4 reconstruction convention).
+
+## Categories
+
+Identity is `(date, sw2_conf_time, direction, instrument)`.
+
+- `UNCHANGED` — matched, same `entry_type`
+- `CHANGED` — matched, `entry_type` differs
+- `REMOVED` — in v8.7 only
+- `ADDED` — in v8.8 only
+
+Cause tags are heuristics (S1 session filter, S3 2-minute sw1
+tolerance, phantom-FVG 3-bar session gap, confirmation-gate, 
+pre-session membership, S2 SMT_IN_FVG without post-FVG, Fix 3
+15m-boundary clock). `no_clear_cause` is valid.
+
+Reports inherit the fill-simulator's three gaps: partial exits,
+concurrent-trade limits, 5m-opposing-SMT blocking.
