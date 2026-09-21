@@ -74,7 +74,8 @@ class SmtTimeAnchorTests(unittest.TestCase):
         src = Path('smt_scanner_v8_8.py').read_text()
         self.assertNotIn("'smt_time':   row['et']", src)
         self.assertIn("conf_row = sdf.iloc[conf_bar_idx]", src)
-        self.assertIn("'smt_time':   conf_row['et']", src)
+        self.assertIn("clock_row = conf_row", src)
+        self.assertIn("'smt_time':   clock_row['et']", src)
 
 
 if __name__ == '__main__':

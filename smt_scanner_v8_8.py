@@ -20,11 +20,15 @@ Fixes applied in this file:
     the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
     post-SMT FVG. Pre-FVG membership is checked at the confirmation-bar
     close (sw2 + 1), not the outer-loop bar. smt_time is that same
-    confirmation-bar timestamp, not the later scan bar i. Confirmation
-    must be within MAX_CONF_GAP_MINS of sw2 — sdf is session+pre_session
-    only, so index+1 can jump 14:29 → next 07:30; those are dropped.
+    confirmation-bar timestamp, not the later scan bar i. SMT_IN_FVG
+    confirmation must be exactly 1 minute after sw2_conf_time (elapsed
+    timestamp). Any other gap is a session boundary: reject SMT_IN_FVG
+    outright, no FVG_AFTER_SMT fallback. FVG_AFTER_SMT is not gated by
+    that confirmation rule; its clock is the FVG-formation bar.
     find_fvg 3-bar windows (j-1, j, j+1) must be consecutive 1-minute
     bars; a session-gap triplet is rejected, not used as a 50% entry.
+    fvg_in_session() uses the same SESSION_CUTOFF_MINS window as
+    classify_bar().
     SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
@@ -66,9 +70,11 @@ SW2_STALENESS_BARS_5M   = 36
 # sdf keeps session + pre_session bars only. Consecutive sdf indices are
 # not always consecutive 1-minute bars: NY Afternoon session ends at 14:29
 # (15:00 minus SESSION_CUTOFF_MINS), and the next sdf row is next day's
-# 07:30 pre_session. Confirmation is sw2_conf_idx + 1, so a last-bar-of-
-# session swing would otherwise be priced ~17 hours later. Drop it.
-MAX_CONF_GAP_MINS       = 5
+# 07:30 pre_session. SMT_IN_FVG confirmation is the true next 1-minute
+# bar after sw2 — not idx+1 with a gap ceiling. FVG_AFTER_SMT does not
+# use this gate.
+SMT_IN_FVG_CONFIRM_MINS = 1.0
+MAX_CONF_GAP_MINS       = SMT_IN_FVG_CONFIRM_MINS  # alias: exact 1 minute, not a 5-min ceiling
 
 # [v8.6] Multi-sw2 candidate consideration
 SW2_CANDIDATES          = 5      # last N swings to consider as sw2
@@ -274,11 +280,8 @@ def classify_bar(hour, minute):
     return None, None
 
 def fvg_in_session(et):
-    t = et.hour*60+et.minute
-    for name,sh,sm,eh,em in SESSIONS:
-        if sh*60+sm<=t<eh*60+em:
-            return True
-    return False
+    """True iff this bar is a classify_bar() session bar (cutoff applied)."""
+    return classify_bar(et.hour, et.minute)[0] == 'session'
 
 
 def fvg_window_is_contiguous(sdf, j):
@@ -646,40 +649,46 @@ def confirmation_gap_minutes(sw2_time, conf_time):
 
 
 def confirmation_bar_is_contiguous(sw2_time, conf_time, max_gap_mins=None):
-    """True when confirmation is after sw2 and within max_gap_mins (default 5)."""
-    if max_gap_mins is None:
-        max_gap_mins = MAX_CONF_GAP_MINS
+    """True iff confirmation is exactly 1 minute after sw2 (SMT_IN_FVG only).
+
+    max_gap_mins is accepted for call-site compatibility but ignored: a 2–5
+    minute hole is not the true next bar.
+    """
     gap = confirmation_gap_minutes(sw2_time, conf_time)
-    return 0 < gap <= max_gap_mins
+    return abs(gap - SMT_IN_FVG_CONFIRM_MINS) < 1e-9
 
 
 def check_sw2_confirmation_gap(signals, max_gap_mins=None):
     """
-    Piece 3 / regression: every output row's smt_time must sit within
-    max_gap_mins of sw2_conf_time. Empty list = pass.
+    Piece 3 / regression: every SMT_IN_FVG row's smt_time must be exactly
+    1 minute after sw2_conf_time. FVG_AFTER_SMT is not on this clock.
+    Empty list = pass.
     """
-    if max_gap_mins is None:
-        max_gap_mins = MAX_CONF_GAP_MINS
     if signals is None or getattr(signals, 'empty', True):
         return []
     missing = [c for c in ('smt_time', 'sw2_conf_time') if c not in signals.columns]
     if missing:
         return [f"signal CSV missing {missing}; cannot check confirmation gap"]
-    smt = pd.to_datetime(signals['smt_time'], utc=True)
-    sw2 = pd.to_datetime(signals['sw2_conf_time'], utc=True)
+    rows = signals
+    if 'entry_type' in signals.columns:
+        rows = signals[signals['entry_type'] == 'SMT_IN_FVG']
+        if rows.empty:
+            return []
+    smt = pd.to_datetime(rows['smt_time'], utc=True)
+    sw2 = pd.to_datetime(rows['sw2_conf_time'], utc=True)
     gap = (smt - sw2).dt.total_seconds() / 60.0
-    bad = (gap <= 0) | (gap > max_gap_mins)
+    bad = (gap - SMT_IN_FVG_CONFIRM_MINS).abs() > 1e-9
     n = int(bad.sum())
     if not n:
         return []
-    sample = signals.loc[bad, ['sw2_conf_time', 'smt_time']].head(3)
-    rows = '; '.join(
+    sample = rows.loc[bad, ['sw2_conf_time', 'smt_time']].head(3)
+    sample_txt = '; '.join(
         f"sw2={r.sw2_conf_time} smt_time={r.smt_time}"
         for r in sample.itertuples(index=False)
     )
     return [
-        f"{n} signals have confirmation bar more than {max_gap_mins} min "
-        f"after sw2 (or not after it): {rows}"
+        f"{n} SMT_IN_FVG signals do not confirm exactly "
+        f"{SMT_IN_FVG_CONFIRM_MINS:g} min after sw2: {sample_txt}"
     ]
 
 
@@ -789,6 +798,8 @@ def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_
     for j in range(smt_idx-1, start, -1):
         if j-1 < 0 or j+1 >= len(sdf): continue
         if not fvg_window_is_contiguous(sdf, j):
+            continue
+        if not fvg_in_session(sdf.iloc[j]['et']):
             continue
         ph = sdf.iloc[j-1][col_h]; pl = sdf.iloc[j-1][col_l]
         nh = sdf.iloc[j+1][col_h]; nl = sdf.iloc[j+1][col_l]
@@ -1078,25 +1089,28 @@ def run(es_path, nq_path):
             instr     = c['instrument']
             instr_l   = instr.lower()
 
-            # Confirmation bar (sw2 + 1) is the market-entry / membership bar.
-            # Must be computed before SMT_IN_FVG vs FVG_AFTER_SMT so both the
-            # pre-FVG lookup and entry_price refer to the same point in time —
-            # not the outer-loop bar i, which can be many bars later for a
-            # still-fresh re-evaluated candidate.
+            # SMT_IN_FVG confirmation is the true next 1-minute bar after sw2.
+            # FVG_AFTER_SMT does not use this gate — it searches from sw2 with
+            # FVG_LOOKAHEAD. A failed SMT_IN_FVG confirmation is not a fallback
+            # into FVG_AFTER_SMT; FVG_AFTER_SMT is its own path when there is
+            # no valid 1-minute confirmation + pre-FVG membership.
             conf_bar_idx = c['sw2_conf_idx'] + 1
-            if conf_bar_idx >= len(sdf):
-                continue  # confirmation bar has not closed yet
-            conf_row = sdf.iloc[conf_bar_idx]
-            # sdf index+1 is not always +1 minute (session-window gap).
-            # Do not price a market entry on a bar hours after sw2.
-            if not confirmation_bar_is_contiguous(c['sw2_conf_time'], conf_row['et']):
-                stale_filtered += 1
-                continue
-            entry_price = round(float(conf_row[f'close_{instr_l}']), 2)
+            conf_row = None
+            conf_ok = False
+            if conf_bar_idx < len(sdf):
+                conf_row = sdf.iloc[conf_bar_idx]
+                conf_ok = confirmation_bar_is_contiguous(
+                    c['sw2_conf_time'], conf_row['et']
+                )
 
-            pre_fvg = find_preexisting_fvg(
-                sdf, conf_bar_idx, direction, instr, PRE_FVG_LOOKBACK, entry_price
-            )
+            pre_fvg = None
+            if conf_ok:
+                entry_price = round(float(conf_row[f'close_{instr_l}']), 2)
+                pre_fvg = find_preexisting_fvg(
+                    sdf, conf_bar_idx, direction, instr, PRE_FVG_LOOKBACK, entry_price
+                )
+            elif conf_row is not None:
+                stale_filtered += 1  # SMT_IN_FVG only: next bar is not +1 minute
 
             if pre_fvg:
                 # ── [v8.8 S2] SMT_IN_FVG ──────────────────────────────────────
@@ -1118,9 +1132,11 @@ def run(es_path, nq_path):
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
                 fvg = None
+                clock_row = conf_row
             else:
                 # ── FVG_AFTER_SMT ─────────────────────────────────────────────
-                # LIMIT entry at 50% of the post-SMT FVG (unchanged). [v8.8 S2] SL is
+                # LIMIT entry at 50% of the post-SMT FVG. Not constrained by
+                # SMT_IN_FVG's sw2+1 confirmation bar. [v8.8 S2] SL is
                 # placed beyond the swing that formed just before the FVG (a swing low
                 # for LONG, a swing high for SHORT), floored at the minimum stop size;
                 # TP at FVG_AFTER_SMT_TP_R.
@@ -1159,17 +1175,16 @@ def run(es_path, nq_path):
                 target_R    = FVG_AFTER_SMT_TP_R
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
+                clock_row = sdf.iloc[fvg['fvg_bar_idx']]
 
-            # smt_time is the confirmation-bar clock (sw2_conf_idx + 1),
-            # not the outer-loop scan bar i. Cached candidates can still be
-            # sitting in the pool many bars later; using row['et'] would
-            # stamp a later, unrelated bar as the signal time.
+            # SMT_IN_FVG clock = confirmation bar (sw2 + 1 minute).
+            # FVG_AFTER_SMT clock = FVG-formation bar. Never the scan bar i.
             signal = {
-                'smt_time':   conf_row['et'],
-                'date':       conf_row['date'],
-                'session':    conf_row['session'],
-                'es_close':   conf_row['close_es'],
-                'nq_close':   conf_row['close_nq'],
+                'smt_time':   clock_row['et'],
+                'date':       clock_row['date'],
+                'session':    clock_row['session'],
+                'es_close':   clock_row['close_es'],
+                'nq_close':   clock_row['close_nq'],
                 **{k:v for k,v in c.items() if k not in ('swept_extreme','sw2_conf_idx')},
                 'entry_type': entry_type,
                 # [v8.8 S2] entry / stop / target
@@ -1241,7 +1256,7 @@ if __name__ == '__main__':
     print(f"sw2 candidates:   last {SW2_CANDIDATES} swings (same day)")
     print(f"Parallel sw1 tol: {SW1_PARALLEL_TOL_MINS} mins")
     print(f"sw2 staleness:    {SW2_STALENESS_MINS_1M} mins (1m) / {SW2_STALENESS_BARS_5M} bars (5m)")
-    print(f"conf-bar max gap: {MAX_CONF_GAP_MINS} mins (drop session-window jumps)")
+    print(f"SMT_IN_FVG confirm: exactly {SMT_IN_FVG_CONFIRM_MINS:g} min after sw2 (not FVG_AFTER_SMT)")
     print(f"Dedup:            by sw2_conf_time (not 30-min bucket)  [v8.7]")
     print(f"FVG search from:  sw2 confirmation bar (not signal bar)  [v8.7]")
     print(f"ES_FVG_MIN:       {ES_FVG_MIN}pt  [v8.7 lowered from 1.0]")

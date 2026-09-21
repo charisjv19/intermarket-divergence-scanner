@@ -44,12 +44,10 @@ a failed SMT_IN_FVG confirmation as an automatic FVG_AFTER_SMT.
 - `smt_time` for FVG_AFTER_SMT is the FVG-formation bar timestamp, not
   `sw2_conf_idx + 1` and not scan bar `i`.
 
-**Known code bug (flagged, not fixed in this documentation pass):**
-`confirmation_bar_is_contiguous()` / `MAX_CONF_GAP_MINS` currently runs on
-every candidate **before** the `if pre_fvg:` SMT_IN_FVG vs FVG_AFTER_SMT
-branch. That can wrongly reject a valid FVG_AFTER_SMT whose protocol never
-depended on sw2+1 contiguity. A later code pass must apply the exact-1-minute
-confirmation check **only** on the SMT_IN_FVG path.
+**Fixed:** the exact-1-minute confirmation check (`SMT_IN_FVG_CONFIRM_MINS`)
+applies only on the SMT_IN_FVG path. A failed confirmation rejects SMT_IN_FVG
+outright; FVG_AFTER_SMT is still searched via `find_fvg()` and is not gated
+by sw2+1 contiguity.
 
 ## Session windows — one canonical definition
 
@@ -73,10 +71,8 @@ classify session bars when building `sdf`:
 There must not be two different definitions of "in session" in the same
 file.
 
-**Known mismatch (flagged, not fixed in this pass):** `fvg_in_session()`
-currently uses the raw `SESSIONS` end times (08:00–10:30 / 13:00–15:00)
-with no cutoff, so 10:00–10:30 and 14:30–15:00 count as in-session for
-FVGs while `classify_bar()` / `sdf` session bars exclude them.
+**Fixed:** `fvg_in_session()` is `classify_bar()[0] == 'session'`, so it
+uses the same `SESSION_CUTOFF_MINS` window as `sdf` session bars.
 
 ## FVG 3-bar window
 
