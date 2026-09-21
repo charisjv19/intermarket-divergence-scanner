@@ -1,0 +1,265 @@
+"""
+Piece 2 — fill simulator.
+
+Walks real 1-min OHLC from each signal and records which level is
+touched first (bar high/low, not close). Does not use target_R.
+
+Outcomes:
+  win            — take_profit touched first
+  loss           — stop_loss touched first
+  no_fill        — FVG_AFTER_SMT limit never traded (do not fake a fill)
+  no_fill_by_eod — filled, but neither SL nor TP by session end
+
+Same-bar SL and TP: stop first (conservative). Session windows match
+the scanner: NY Morning 8:00–10:30 ET, NY Afternoon 1:00–3:00 PM ET.
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, time
+from pathlib import Path
+from typing import Optional, Union
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+ET = ZoneInfo("America/New_York")
+SESSIONS = [("NY Morning", 8, 0, 10, 30), ("NY Afternoon", 13, 0, 15, 0)]
+LIMIT_TYPES = {"FVG_AFTER_SMT"}
+OUTPUT_COLS = ["outcome", "exit_price", "exit_time", "realized_R"]
+
+
+def _to_utc(ts) -> pd.Timestamp:
+    t = pd.Timestamp(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize(ET)
+    return t.tz_convert("UTC")
+
+
+def _to_et(ts) -> pd.Timestamp:
+    return _to_utc(ts).tz_convert(ET)
+
+
+def prepare_bars(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename = {c: c.lower() for c in ("Open", "High", "Low", "Close", "Time") if c in out.columns}
+    if rename:
+        out = out.rename(columns=rename)
+    if "time" not in out.columns:
+        raise ValueError("bars need a time column")
+    out["time"] = pd.to_datetime(out["time"], utc=True)
+    out = out.sort_values("time").drop_duplicates(subset=["time"]).reset_index(drop=True)
+    out["et"] = out["time"].dt.tz_convert(ET)
+    return out
+
+
+def session_end_utc(session: str, when) -> pd.Timestamp:
+    et = _to_et(when)
+    d = et.date()
+    for name, _sh, _sm, eh, em in SESSIONS:
+        if name == session:
+            end = datetime.combine(d, time(eh, em), tzinfo=ET)
+            return pd.Timestamp(end).tz_convert("UTC")
+    # unknown session label: end at afternoon close that day
+    end = datetime.combine(d, time(15, 0), tzinfo=ET)
+    return pd.Timestamp(end).tz_convert("UTC")
+
+
+def _risk(entry: float, stop: float) -> float:
+    return abs(float(entry) - float(stop))
+
+
+def _r(entry: float, stop: float, exit_px: float, direction: str) -> float:
+    risk = _risk(entry, stop)
+    if risk == 0:
+        return float("nan")
+    if direction == "LONG":
+        return (float(exit_px) - float(entry)) / risk
+    return (float(entry) - float(exit_px)) / risk
+
+
+def _limit_filled(direction: str, entry: float, high: float, low: float) -> bool:
+    if direction == "LONG":
+        return float(low) <= float(entry)
+    return float(high) >= float(entry)
+
+
+def _touch_on_bar(direction: str, entry: float, stop: float, tp: float, o, h, l) -> Optional[str]:
+    """Return 'loss', 'win', or None. Stop wins if both levels trade in the bar."""
+    o, h, l = float(o), float(h), float(l)
+    stop, tp = float(stop), float(tp)
+    if direction == "LONG":
+        stop_hit = l <= stop
+        tp_hit = h >= tp
+        if o <= stop:
+            return "loss"
+        if o >= tp:
+            return "win"
+        if stop_hit and tp_hit:
+            return "loss"
+        if stop_hit:
+            return "loss"
+        if tp_hit:
+            return "win"
+        return None
+    stop_hit = h >= stop
+    tp_hit = l <= tp
+    if o >= stop:
+        return "loss"
+    if o <= tp:
+        return "win"
+    if stop_hit and tp_hit:
+        return "loss"
+    if stop_hit:
+        return "loss"
+    if tp_hit:
+        return "win"
+    return None
+
+
+def _empty_result(outcome: str) -> dict:
+    return {
+        "outcome": outcome,
+        "exit_price": pd.NA,
+        "exit_time": pd.NaT,
+        "realized_R": float("nan"),
+    }
+
+
+def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
+    required = ("entry_price", "stop_loss", "take_profit", "direction")
+    missing = [c for c in required if c not in row.index or pd.isna(row[c])]
+    if missing:
+        raise ValueError(f"signal missing {missing}; need v8.8 entry_price/stop_loss/take_profit")
+
+    entry = float(row["entry_price"])
+    stop = float(row["stop_loss"])
+    tp = float(row["take_profit"])
+    direction = str(row["direction"]).upper()
+    entry_type = str(row["entry_type"]) if "entry_type" in row.index and pd.notna(row["entry_type"]) else ""
+    is_limit = entry_type in LIMIT_TYPES
+
+    start_raw = row["fvg_bar"] if is_limit and "fvg_bar" in row.index and pd.notna(row.get("fvg_bar")) else row.get("smt_time")
+    if start_raw is None or pd.isna(start_raw):
+        raise ValueError("signal needs smt_time (and fvg_bar for FVG_AFTER_SMT when present)")
+    start = _to_utc(start_raw)
+    session = row["session"] if "session" in row.index and pd.notna(row.get("session")) else ""
+    end = session_end_utc(session, start_raw)
+
+    window = bars[(bars["time"] >= start) & (bars["time"] < end)].reset_index(drop=True)
+    if window.empty:
+        return _empty_result("no_fill" if is_limit else "no_fill_by_eod")
+
+    filled = not is_limit
+    fill_i = 0 if filled else None
+
+    if is_limit:
+        for i, bar in window.iterrows():
+            if _limit_filled(direction, entry, bar["high"], bar["low"]):
+                filled = True
+                fill_i = int(i)
+                break
+        if not filled:
+            return _empty_result("no_fill")
+        # Market SMT_IN_FVG fills at the confirmation close: SL/TP from the next bar.
+        # Limit can fill mid-bar; check the remainder of the fill bar too.
+        fill_bar = window.iloc[fill_i]
+        hit = _touch_on_bar(direction, entry, stop, tp, fill_bar["open"], fill_bar["high"], fill_bar["low"])
+        if hit:
+            exit_px = stop if hit == "loss" else tp
+            return {
+                "outcome": hit,
+                "exit_price": exit_px,
+                "exit_time": fill_bar["time"],
+                "realized_R": _r(entry, stop, exit_px, direction),
+            }
+        scan = window.iloc[fill_i + 1 :]
+    else:
+        # Fill at close of the start bar; path after that close is the next bar.
+        scan = window.iloc[1:] if len(window) else window
+
+    last = None
+    for _, bar in scan.iterrows():
+        last = bar
+        hit = _touch_on_bar(direction, entry, stop, tp, bar["open"], bar["high"], bar["low"])
+        if hit:
+            exit_px = stop if hit == "loss" else tp
+            return {
+                "outcome": hit,
+                "exit_price": exit_px,
+                "exit_time": bar["time"],
+                "realized_R": _r(entry, stop, exit_px, direction),
+            }
+
+    if last is None:
+        last = window.iloc[-1]
+    close = float(last["close"])
+    return {
+        "outcome": "no_fill_by_eod",
+        "exit_price": close,
+        "exit_time": last["time"],
+        "realized_R": _r(entry, stop, close, direction),
+    }
+
+
+def _bars_for_instrument(instrument: str, bars, es_bars, nq_bars) -> pd.DataFrame:
+    inst = str(instrument).upper()
+    if inst in {"MES", "ES"}:
+        src = es_bars if es_bars is not None else bars
+    elif inst in {"MNQ", "NQ"}:
+        src = nq_bars if nq_bars is not None else bars
+    else:
+        src = bars
+    if src is None:
+        raise ValueError(f"no bars provided for instrument {instrument}")
+    return src if "et" in src.columns else prepare_bars(src)
+
+
+def simulate_fills(
+    signals: Union[pd.DataFrame, str, Path],
+    bars: Optional[pd.DataFrame] = None,
+    *,
+    es_bars: Optional[pd.DataFrame] = None,
+    nq_bars: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """Append outcome, exit_price, exit_time, realized_R. Walkes high/low, not target_R."""
+    sigs = pd.read_csv(signals) if not isinstance(signals, pd.DataFrame) else signals.copy()
+    if bars is not None:
+        bars = prepare_bars(bars)
+    if es_bars is not None:
+        es_bars = prepare_bars(es_bars)
+    if nq_bars is not None:
+        nq_bars = prepare_bars(nq_bars)
+
+    rows = []
+    for _, row in sigs.iterrows():
+        inst = row["instrument"] if "instrument" in row.index else "ES"
+        b = _bars_for_instrument(inst, bars, es_bars, nq_bars)
+        rows.append(simulate_one(row, b))
+    extra = pd.DataFrame(rows, index=sigs.index)
+    for col in OUTPUT_COLS:
+        sigs[col] = extra[col]
+    return sigs
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    p = argparse.ArgumentParser(description="Simulate fills on 1-min bars for a signal CSV.")
+    p.add_argument("--signals", required=True)
+    p.add_argument("--bars", help="Single-instrument OHLC CSV")
+    p.add_argument("--es-bars")
+    p.add_argument("--nq-bars")
+    p.add_argument("--out", required=True)
+    args = p.parse_args(argv)
+    es = pd.read_csv(args.es_bars) if args.es_bars else None
+    nq = pd.read_csv(args.nq_bars) if args.nq_bars else None
+    bars = pd.read_csv(args.bars) if args.bars else None
+    out = simulate_fills(args.signals, bars, es_bars=es, nq_bars=nq)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(args.out, index=False)
+    print(out["outcome"].value_counts().to_string())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
