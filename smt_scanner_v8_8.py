@@ -23,6 +23,8 @@ Fixes applied in this file:
     confirmation-bar timestamp, not the later scan bar i. Confirmation
     must be within MAX_CONF_GAP_MINS of sw2 — sdf is session+pre_session
     only, so index+1 can jump 14:29 → next 07:30; those are dropped.
+    find_fvg 3-bar windows (j-1, j, j+1) must be consecutive 1-minute
+    bars; a session-gap triplet is rejected, not used as a 50% entry.
     SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
@@ -277,6 +279,22 @@ def fvg_in_session(et):
         if sh*60+sm<=t<eh*60+em:
             return True
     return False
+
+
+def fvg_window_is_contiguous(sdf, j):
+    """
+    True iff sdf bars j-1, j, j+1 are consecutive 1-minute clocks.
+    sdf is session+pre_session only, so consecutive indices can jump
+    14:29 → next 07:30. A 3-bar FVG must not span that gap.
+    """
+    if j < 1 or j + 1 >= len(sdf):
+        return False
+    t0 = pd.Timestamp(sdf.iloc[j - 1]['et'])
+    t1 = pd.Timestamp(sdf.iloc[j]['et'])
+    t2 = pd.Timestamp(sdf.iloc[j + 1]['et'])
+    g01 = (t1 - t0).total_seconds() / 60.0
+    g12 = (t2 - t1).total_seconds() / 60.0
+    return g01 == 1.0 and g12 == 1.0
 
 
 # ── [v8.3] 15m MACRO BIAS ENGINE ─────────────────────────────────────────────
@@ -665,6 +683,43 @@ def check_sw2_confirmation_gap(signals, max_gap_mins=None):
     ]
 
 
+def check_fvg_windows_contiguous(signals, sdf):
+    """
+    Piece 3 / regression: every FVG_AFTER_SMT fvg_bar's 3-bar window on sdf
+    must be consecutive 1-minute bars. Empty list = pass.
+    """
+    if signals is None or getattr(signals, 'empty', True):
+        return []
+    if 'entry_type' not in signals.columns or 'fvg_bar' not in signals.columns:
+        return ["signal CSV missing entry_type/fvg_bar; cannot check FVG window"]
+    fvg_rows = signals[signals['entry_type'] == 'FVG_AFTER_SMT']
+    if fvg_rows.empty:
+        return []
+    sdf_et = pd.to_datetime(sdf['et'], utc=True)
+    fails = []
+    n_bad = 0
+    sample = []
+    for r in fvg_rows.itertuples(index=False):
+        fvg_et = pd.to_datetime(r.fvg_bar, utc=True)
+        hits = sdf.index[sdf_et == fvg_et]
+        if len(hits) == 0:
+            n_bad += 1
+            if len(sample) < 3:
+                sample.append(f"fvg_bar={r.fvg_bar} not in sdf")
+            continue
+        j = int(hits[0])
+        if not fvg_window_is_contiguous(sdf, j):
+            n_bad += 1
+            if len(sample) < 3:
+                sample.append(f"fvg_bar={r.fvg_bar}")
+    if not n_bad:
+        return []
+    return [
+        f"{n_bad} FVG_AFTER_SMT rows have a 3-bar window that is not "
+        f"consecutive 1-minute bars: {'; '.join(sample)}"
+    ]
+
+
 # ── [v8.2] STALENESS CHECK ────────────────────────────────────────────────────
 def sw1_is_fresh(t1, t2):
     """
@@ -722,6 +777,7 @@ def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_
     Looks back from smt_idx for a pre-existing FVG that current_price is inside.
     Callers must pass the sw2 confirmation bar (sw2_conf_idx + 1) as smt_idx
     and that bar's close as current_price, so membership matches the market entry.
+    The 3-bar window must be consecutive 1-minute bars (same rule as find_fvg).
     """
     col_h = f'high_{instrument.lower()}'
     col_l = f'low_{instrument.lower()}'
@@ -732,6 +788,8 @@ def find_preexisting_fvg(sdf, smt_idx, direction, instrument, lookback, current_
     # search backwards — we want the most recent pre-existing FVG
     for j in range(smt_idx-1, start, -1):
         if j-1 < 0 or j+1 >= len(sdf): continue
+        if not fvg_window_is_contiguous(sdf, j):
+            continue
         ph = sdf.iloc[j-1][col_h]; pl = sdf.iloc[j-1][col_l]
         nh = sdf.iloc[j+1][col_h]; nl = sdf.iloc[j+1][col_l]
 
@@ -771,6 +829,8 @@ def find_fvg(sdf, start_idx, direction, instrument, lookahead, swept_extreme):
     This prevents the scanner from skipping a valid early FVG in favor of
     a later one that happens to appear first in the iteration.
     All valid FVGs are collected, then we return the earliest one.
+    Each 3-bar window (j-1, j, j+1) must be consecutive 1-minute bars;
+    a session-gap triplet is rejected entirely.
     """
     col_h = f'high_{instrument.lower()}'
     col_l = f'low_{instrument.lower()}'
@@ -781,6 +841,8 @@ def find_fvg(sdf, start_idx, direction, instrument, lookahead, swept_extreme):
     candidates = []
 
     for j in range(start_idx+1, end+1):
+        if not fvg_window_is_contiguous(sdf, j):
+            continue
         ph = sdf.iloc[j-1][col_h]; pl = sdf.iloc[j-1][col_l]
         nh = sdf.iloc[j+1][col_h]; nl = sdf.iloc[j+1][col_l]
 

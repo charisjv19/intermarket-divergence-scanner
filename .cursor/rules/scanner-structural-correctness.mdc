@@ -22,6 +22,11 @@ alwaysApply: true
   jump across a session gap (14:29 → next 07:30). Those signals must be
   dropped, not priced on the distant bar. Piece 3 must fail any output
   row that violates this (`check_sw2_confirmation_gap`).
+- A 3-bar FVG (`j-1`, `j`, `j+1`) must be consecutive 1-minute bars.
+  `fvg_in_session()` on the middle bar is not enough; `find_fvg` must
+  reject any window whose elapsed time is not 1+1 minutes. Piece 3 must
+  fail any FVG_AFTER_SMT whose `fvg_bar` spans a session gap
+  (`check_fvg_windows_contiguous`).
 - Signal dedup must be based on `sw2_conf_time` within a 30-min session bucket,
   per direction per instrument, to prevent duplicate signals.
 - SMT divergence must be measured on **wicks**, at structural
