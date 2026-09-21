@@ -282,13 +282,9 @@ def render_report(filled: pd.DataFrame, *, label: str) -> str:
                     lines.append(f"    {row['outcome']:<22} {int(row['count']):4d}  {row['pct']:5.1f}%")
     lines += [
         "",
-        "2. Stats — no_fill_by_eod EXCLUDED (resolved win/loss only)",
+        "2. Stats — no_fill_by_eod EXCLUDED (resolved win/loss only; realized_R not target_R)",
         _stats_block("", s1).lstrip("\n"),
         f"  max drawdown (equity): {_fmt_r(max_drawdown(eq1['equity'].to_numpy() if len(eq1) else np.array([])))}",
-        "",
-        "5. Stats — no_fill_by_eod as 0R (still exclude never/timeout/50pct)",
-        _stats_block("", s2).lstrip("\n"),
-        f"  max drawdown (equity): {_fmt_r(max_drawdown(eq2['equity'].to_numpy() if len(eq2) else np.array([])))}",
         "",
         "3. Breakdown by entry_type / instrument / month (view 1: eod excluded)",
     ]
@@ -299,7 +295,20 @@ def render_report(filled: pd.DataFrame, *, label: str) -> str:
     if month is not None:
         tmp = filled.assign(month=month)
         lines.append(breakdown(tmp, "month", False))
-    lines += ["", "4. Equity curve: see pnl_equity_excluded.svg / pnl_equity_eod0.svg", "", GAP_DISCLOSURE]
+    lines += [
+        "",
+        "4. Equity curve (cumulative realized_R, chronological) and max drawdown",
+        f"  view 1 (eod excluded): end={_fmt_r(float(eq1['equity'].iloc[-1]) if len(eq1) else float('nan'))}  "
+        f"maxDD={_fmt_r(max_drawdown(eq1['equity'].to_numpy() if len(eq1) else np.array([])))}",
+        f"  view 2 (eod as 0R):     end={_fmt_r(float(eq2['equity'].iloc[-1]) if len(eq2) else float('nan'))}  "
+        f"maxDD={_fmt_r(max_drawdown(eq2['equity'].to_numpy() if len(eq2) else np.array([])))}",
+        "  files: pnl_equity_excluded.svg / pnl_equity_eod0.svg",
+        "",
+        "5. Same stats treating no_fill_by_eod as breakeven (0R) instead of excluded",
+        _stats_block("", s2).lstrip("\n"),
+        "",
+        GAP_DISCLOSURE,
+    ]
     return "\n".join(lines) + "\n"
 
 
