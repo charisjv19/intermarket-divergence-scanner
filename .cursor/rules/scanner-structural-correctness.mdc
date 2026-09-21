@@ -10,12 +10,37 @@ alwaysApply: true
   zero tolerance, same bar only. Never loosen this to a ±N minute tolerance,
   even to raise signal count. (This is defect **S3** — see the v8.8 audit-scope
   rule for its audit ID and current fix status.)
-- ES/NQ 1-minute bars are aligned by **strict inner join on timestamp**.
-  A minute present on only one instrument is dropped from both. Never
-  forward-fill, outer-join, or otherwise assume a missing bar on either
-  side. 5m/15m resample must use that same intersection, not each CSV
-  independently.
+- ES/NQ 1-minute bars must be **strict inner-joined on timestamp** — see
+  **ES/NQ timestamp inner join** below. Never fill a missing minute.
 - FVG search must start from `sw2_conf_idx`, not from the signal bar.
+
+## ES/NQ timestamp inner join
+
+ES and NQ 1-minute bars must be **inner-joined on exact timestamp** via
+`merge_es_nq_1m()`. A minute present on only one instrument is dropped
+from **both**. Never forward-fill, outer-join, left-join, or otherwise
+assume a missing bar on either side.
+
+This is not only the 1m `load()` merge. 5m and 15m resampling
+(`resample_to_15m_and_5m()`) must resample **only the shared /
+intersected timestamps**, not each instrument's CSV independently. An
+ES-only (or NQ-only) 1-minute bar must not leak into a 5m/15m OHLC
+bucket — a one-sided high would otherwise distort the aggregated bar.
+
+After the merge, a NaN in either `close_es` or `close_nq` must **raise**,
+not silently pass through. A missing-bar minute is a dropped row, not a
+filled close.
+
+**Found and fixed this session** on the Feb–Apr dataset: 13 ES-only and
+1 NQ-only 1-minute timestamps. `sdf` was already an inner join (those
+minutes were already gone from the 1m tape), but 5m/15m were resampled
+from each CSV independently, so a one-sided minute could still enter an
+aggregated bar. After the intersection fix: **0/0 exclusive timestamps
+on every tape** (1m, sdf, 15m, 5m). Covered by `test_es_nq_align.py`.
+
+**Fixed:** `merge_es_nq_1m()` uses `how='inner'` and raises on NaN
+closes; `resample_to_15m_and_5m()` restricts both instruments to
+`es.index.intersection(nq.index)` before aggregating.
 
 ## Entry-type timing — two protocols, do not mix them
 
