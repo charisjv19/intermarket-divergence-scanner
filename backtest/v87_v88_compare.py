@@ -314,6 +314,16 @@ def cause_removed(v87: pd.Series, sdf_times: Optional[list[pd.Timestamp]]) -> tu
         return "session_cutoff_fvg", "; ".join(details)
     if pre_sess:
         return "pre_session_membership", "; ".join(details)
+    smt = _to_et(v87["smt_time"] if "smt_time" in v87.index else None)
+    sw2 = _to_et(v87["sw2_conf_time"])
+    if smt is not None and sw2 is not None:
+        scan_gap = (smt - sw2).total_seconds() / 60.0
+        if scan_gap > MAX_CONF_GAP_MINS:
+            details.append(
+                f"v8.7 smt_time is {scan_gap:.0f}m after sw2 (scan-i); "
+                "v8.8 prices and 15m/5m filters at the confirmation clock"
+            )
+            return "fix3_confluence_clock", "; ".join(details)
     if fix3:
         return "fix3_confluence_clock", "; ".join(details)
     return "no_clear_cause", "; ".join(details) if details else "does not match a named v8.8 fix heuristic"
@@ -343,6 +353,12 @@ def cause_added(v88: pd.Series, sdf_times: Optional[list[pd.Timestamp]]) -> tupl
         return "confirmation_gate_rescope", "; ".join(details)
     if pre_sess:
         return "pre_session_membership", "; ".join(details)
+    if etype == "FVG_AFTER_SMT":
+        details.append(
+            "new FVG_AFTER_SMT identity; S1/S3/S2 do not add this path — "
+            "likely 15m/5m evaluated at confirmation clock (Fix 3) vs v8.7 scan-i cache"
+        )
+        return "fix3_confluence_clock", "; ".join(details)
     if fix3:
         return "fix3_confluence_clock", "; ".join(details)
     return "no_clear_cause", "; ".join(details) if details else "does not match a named v8.8 fix heuristic"

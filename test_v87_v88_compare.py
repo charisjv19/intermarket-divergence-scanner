@@ -72,6 +72,36 @@ class TestCategorize(unittest.TestCase):
         added = cats[cats["category"] == "ADDED"].iloc[0]
         self.assertEqual(added["cause"], "s2_smt_in_fvg_no_post_fvg")
 
+    def test_added_fvg_after_smt_is_fix3(self):
+        v87 = pd.DataFrame([_sig("87", sw2_conf_time=datetime(2026, 2, 13, 8, 0, tzinfo=ET))])
+        v88 = pd.DataFrame(
+            [
+                _sig(
+                    "88",
+                    sw2_conf_time=datetime(2026, 2, 13, 13, 13, tzinfo=ET),
+                    smt_time=datetime(2026, 2, 13, 13, 22, tzinfo=ET),
+                    entry_type="FVG_AFTER_SMT",
+                    instrument="NQ",
+                )
+            ]
+        )
+        cats = categorize(v87, v88)
+        added = cats[cats["category"] == "ADDED"].iloc[0]
+        self.assertEqual(added["cause"], "fix3_confluence_clock")
+
+    def test_removed_late_scan_bar_is_fix3(self):
+        row = pd.Series(
+            _sig(
+                "87",
+                sw2_conf_time=datetime(2026, 2, 18, 8, 36, tzinfo=ET),
+                smt_time=datetime(2026, 2, 18, 9, 0, tzinfo=ET),
+                es_sw1_time="2026-02-18 08:20",
+                nq_sw1_time="2026-02-18 08:20",
+            )
+        )
+        cause, _ = cause_removed(row, sdf_times=None)
+        self.assertEqual(cause, "fix3_confluence_clock")
+
     def test_s3_gap(self):
         row = pd.Series(_sig("87", es_sw1_time="2026-02-02 08:10", nq_sw1_time="2026-02-02 08:12"))
         self.assertEqual(sw1_gap_minutes(row), 2.0)
