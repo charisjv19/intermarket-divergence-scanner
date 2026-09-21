@@ -19,7 +19,8 @@ Fixes applied in this file:
   - [S2] Entry / stop / target protocol. SMT_IN_FVG now takes a MARKET entry at
     the close of the sw2 confirmation bar (sw2 bar + 1), decoupled from any
     post-SMT FVG. Pre-FVG membership is checked at the confirmation-bar
-    close (sw2 + 1), not the outer-loop bar. SL is just outside that FVG
+    close (sw2 + 1), not the outer-loop bar. smt_time is that same
+    confirmation-bar timestamp, not the later scan bar i. SL is just outside that FVG
     (LONG: pre_fvg_low - buffer / SHORT: pre_fvg_high + buffer), then
     floored at the 20-tick (ES) / 40-tick (NQ) minimum. TP = 1.5R.
     FVG_AFTER_SMT keeps its 50% limit entry but now also emits an SL (beyond the
@@ -1039,12 +1040,17 @@ def run(es_path, nq_path):
                 take_profit = round(entry_price + target_R * risk, 2) if direction == 'LONG' \
                               else round(entry_price - target_R * risk, 2)
 
+            # smt_time is the confirmation-bar clock (sw2_conf_idx + 1),
+            # not the outer-loop scan bar i. Cached candidates can still be
+            # sitting in the pool many bars later; using row['et'] would
+            # stamp a later, unrelated bar as the signal time.
+            conf_row = sdf.iloc[conf_bar_idx]
             signal = {
-                'smt_time':   row['et'],
-                'date':       row['date'],
-                'session':    row['session'],
-                'es_close':   row['close_es'],
-                'nq_close':   row['close_nq'],
+                'smt_time':   conf_row['et'],
+                'date':       conf_row['date'],
+                'session':    conf_row['session'],
+                'es_close':   conf_row['close_es'],
+                'nq_close':   conf_row['close_nq'],
                 **{k:v for k,v in c.items() if k not in ('swept_extreme','sw2_conf_idx')},
                 'entry_type': entry_type,
                 # [v8.8 S2] entry / stop / target

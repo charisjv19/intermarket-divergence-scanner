@@ -68,5 +68,14 @@ class SmtInFvgStopTests(unittest.TestCase):
         self.assertEqual(risk, 12.0)
 
 
+class SmtTimeAnchorTests(unittest.TestCase):
+    def test_smt_time_is_confirmation_bar_not_scan_row(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        self.assertNotIn("'smt_time':   row['et']", src)
+        self.assertIn("conf_row = sdf.iloc[conf_bar_idx]", src)
+        self.assertIn("'smt_time':   conf_row['et']", src)
+
+
 if __name__ == '__main__':
     unittest.main()

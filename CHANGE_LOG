@@ -6,6 +6,13 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## v8.8 (September 2026)
+
+### Fixed
+- **`smt_time` is the confirmation bar, not the scan bar** — Output `smt_time` was `row['et']` from the outer `for i, row in sdf.iterrows()` loop. Cached SMT candidates can still be in the pool many bars later, so that stamped a later, unrelated bar. `smt_time` (and `date` / `session` / closes) now come from `sdf.iloc[sw2_conf_idx + 1]`, the same confirmation bar already used for `entry_price`.
+
+---
+
 ## v8.7 (June 2026)
 
 **Bug fixes identified through manual blind review of Feb 25 signals.**

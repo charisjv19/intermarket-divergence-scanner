@@ -14,6 +14,9 @@ alwaysApply: true
 - SMT_IN_FVG's pre-existing FVG check must be anchored to the confirmation
   bar (`sw2_conf_idx + 1`), not the current scanning bar (`i`), so
   `entry_price` and FVG membership always reference the same bar.
+- `smt_time` must be the confirmation-bar timestamp (`sw2_conf_idx + 1`),
+  not the outer-loop scan bar `i`. Cached candidates can be re-emitted
+  many bars later; stamping `row['et']` would attach a later, unrelated bar.
 - Signal dedup must be based on `sw2_conf_time` within a 30-min session bucket,
   per direction per instrument, to prevent duplicate signals.
 - SMT divergence must be measured on **wicks**, at structural
