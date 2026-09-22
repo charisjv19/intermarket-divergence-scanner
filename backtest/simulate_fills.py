@@ -7,6 +7,7 @@ touched first (bar high/low, not close). Does not use target_R.
 Outcomes:
   win                  — take_profit touched first
   loss                 — stop_loss touched first
+  no_impulse_exit      — SMT_IN_FVG: no directional FVG within 7 bars of entry
   no_fill_never_traded — FVG_AFTER_SMT limit never reached the price
   no_fill_timeout      — limit unfilled 20 minutes after fvg_bar
   no_fill_50pct        — price ran 50% of the way to TP before the limit filled
@@ -35,7 +36,17 @@ LIMIT_FILL_MINUTES = 20
 LIMIT_CANCEL_TP_FRAC = 0.5
 MORNING_EXTEND_AFTER = time(9, 45)
 MORNING_EXTEND_END = time(11, 0)
+# Experimental SMT_IN_FVG post-entry management (not a scanner version).
+# Same 3-bar contiguous-window + session-gap guards as find_fvg(); size
+# bounds match the scanner. No swept-mid and no fvg_in_session cutoff —
+# the trade is already live. 0 disables.
+IMPULSE_CONFIRM_BARS = 7
+ES_FVG_MIN = 0.5
+ES_FVG_MAX = 25.0
+NQ_FVG_MIN = 3.0
+NQ_FVG_MAX = 150.0
 OUTPUT_COLS = ["outcome", "exit_price", "exit_time", "realized_R"]
+IMPULSE_COLS = ["impulse_fvg_found", "impulse_fvg_time"]
 
 GAP_DISCLOSURE = (
     "Fill-simulator known gaps (must disclose on every report):\n"
@@ -122,6 +133,39 @@ def _ran_50pct_to_tp(direction: str, entry: float, tp: float, high: float, low: 
     return float(low) <= mid
 
 
+def _fvg_size_bounds(instrument: str) -> tuple[float, float]:
+    inst = str(instrument).upper()
+    if inst in {"MNQ", "NQ"}:
+        return NQ_FVG_MIN, NQ_FVG_MAX
+    return ES_FVG_MIN, ES_FVG_MAX
+
+
+def _fvg_window_is_contiguous(b0, b1, b2) -> bool:
+    """True iff the three bars are consecutive 1-minute clocks (session-gap guard)."""
+    t0 = pd.Timestamp(b0["time"])
+    t1 = pd.Timestamp(b1["time"])
+    t2 = pd.Timestamp(b2["time"])
+    g01 = (t1 - t0).total_seconds() / 60.0
+    g12 = (t2 - t1).total_seconds() / 60.0
+    return g01 == 1.0 and g12 == 1.0
+
+
+def _directional_impulse_fvg(direction: str, b0, b1, b2, instrument: str) -> bool:
+    """Trade-direction 3-bar FVG. LONG: prev high < next low; SHORT: prev low > next high."""
+    if not _fvg_window_is_contiguous(b0, b1, b2):
+        return False
+    ph, pl = float(b0["high"]), float(b0["low"])
+    nh, nl = float(b2["high"]), float(b2["low"])
+    fvg_min, fvg_max = _fvg_size_bounds(instrument)
+    if direction == "LONG" and ph < nl:
+        size = round(nl - ph, 2)
+        return fvg_min <= size <= fvg_max
+    if direction == "SHORT" and pl > nh:
+        size = round(pl - nh, 2)
+        return fvg_min <= size <= fvg_max
+    return False
+
+
 def _touch_on_bar(direction: str, entry: float, stop: float, tp: float, o, h, l) -> Optional[str]:
     """Return 'loss', 'win', or None. Stop wins if both levels trade in the bar."""
     o, h, l = float(o), float(h), float(l)
@@ -162,6 +206,8 @@ def _empty_result(outcome: str, path: Optional[list] = None) -> dict:
         "exit_time": pd.NaT,
         "realized_R": float("nan"),
         "path": path or [],
+        "impulse_fvg_found": pd.NA,
+        "impulse_fvg_time": pd.NaT,
     }
 
 
@@ -178,7 +224,18 @@ def _bar_step(bar, action: str) -> dict:
     }
 
 
-def _hit_result(hit: str, entry: float, stop: float, tp: float, direction: str, bar, path: list) -> dict:
+def _hit_result(
+    hit: str,
+    entry: float,
+    stop: float,
+    tp: float,
+    direction: str,
+    bar,
+    path: list,
+    *,
+    impulse_fvg_found=pd.NA,
+    impulse_fvg_time=pd.NaT,
+) -> dict:
     exit_px = stop if hit == "loss" else tp
     path.append(_bar_step(bar, "stop" if hit == "loss" else "target"))
     return {
@@ -187,10 +244,17 @@ def _hit_result(hit: str, entry: float, stop: float, tp: float, direction: str, 
         "exit_time": bar["time"],
         "realized_R": _r(entry, stop, exit_px, direction),
         "path": path,
+        "impulse_fvg_found": impulse_fvg_found,
+        "impulse_fvg_time": impulse_fvg_time,
     }
 
 
-def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
+def simulate_one(
+    row: pd.Series,
+    bars: pd.DataFrame,
+    *,
+    impulse_confirm_bars: Optional[int] = IMPULSE_CONFIRM_BARS,
+) -> dict:
     required = ("entry_price", "stop_loss", "take_profit", "direction")
     missing = [c for c in required if c not in row.index or pd.isna(row[c])]
     if missing:
@@ -201,7 +265,9 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
     tp = float(row["take_profit"])
     direction = str(row["direction"]).upper()
     entry_type = str(row["entry_type"]) if "entry_type" in row.index and pd.notna(row["entry_type"]) else ""
+    instrument = str(row["instrument"]) if "instrument" in row.index and pd.notna(row.get("instrument")) else "ES"
     is_limit = entry_type in LIMIT_TYPES
+    impulse_n = 0 if is_limit else (int(impulse_confirm_bars) if impulse_confirm_bars else 0)
 
     start_raw = row["fvg_bar"] if is_limit and "fvg_bar" in row.index and pd.notna(row.get("fvg_bar")) else row.get("smt_time")
     if start_raw is None or pd.isna(start_raw):
@@ -245,6 +311,8 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
                 "exit_time": fill_bar["time"],
                 "realized_R": _r(entry, stop, exit_px, direction),
                 "path": path,
+                "impulse_fvg_found": pd.NA,
+                "impulse_fvg_time": pd.NaT,
             }
     else:
         # SMT_IN_FVG fills at the confirmation-bar CLOSE. That bar's high/low
@@ -254,19 +322,50 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
     flatten_end = flatten_end_utc(session, fill_bar["time"])
     scan = bars[(bars["time"] > fill_bar["time"]) & (bars["time"] < flatten_end)].reset_index(drop=True)
 
+    impulse_needed = impulse_n > 0
+    impulse_window = [fill_bar] if impulse_needed else []
+    impulse_confirmed = False
+    impulse_fvg_found = pd.NA if not impulse_needed else False
+    impulse_fvg_time = pd.NaT
+
     last = None
     for _, bar in scan.iterrows():
         last = bar
+        if impulse_needed and not impulse_confirmed:
+            impulse_window.append(bar)
+            if len(impulse_window) >= 3:
+                w0, w1, w2 = impulse_window[-3], impulse_window[-2], impulse_window[-1]
+                if _directional_impulse_fvg(direction, w0, w1, w2, instrument):
+                    impulse_confirmed = True
+                    impulse_fvg_found = True
+                    impulse_fvg_time = bar["time"]
+            if len(impulse_window) >= impulse_n and not impulse_confirmed:
+                close = float(bar["close"])
+                path.append(_bar_step(bar, "no_impulse_exit"))
+                return {
+                    "outcome": "no_impulse_exit",
+                    "exit_price": close,
+                    "exit_time": bar["time"],
+                    "realized_R": _r(entry, stop, close, direction),
+                    "path": path,
+                    "impulse_fvg_found": False,
+                    "impulse_fvg_time": pd.NaT,
+                }
         hit = _touch_on_bar(direction, entry, stop, tp, bar["open"], bar["high"], bar["low"])
         if hit:
-            return _hit_result(hit, entry, stop, tp, direction, bar, path)
-        path.append(_bar_step(bar, "open"))
+            return _hit_result(
+                hit, entry, stop, tp, direction, bar, path,
+                impulse_fvg_found=impulse_fvg_found,
+                impulse_fvg_time=impulse_fvg_time,
+            )
+        action = "impulse_fvg" if (impulse_confirmed and impulse_fvg_time == bar["time"]) else "open"
+        path.append(_bar_step(bar, action))
 
     if last is None:
         last = fill_bar
     close = float(last["close"])
-    if not path or path[-1]["time"] != last["time"] or path[-1]["action"] == "open":
-        if path and path[-1]["time"] == last["time"] and path[-1]["action"] == "open":
+    if not path or path[-1]["time"] != last["time"] or path[-1]["action"] in {"open", "impulse_fvg"}:
+        if path and path[-1]["time"] == last["time"] and path[-1]["action"] in {"open", "impulse_fvg"}:
             path[-1]["action"] = "flatten_eod"
         else:
             path.append(_bar_step(last, "flatten_eod"))
@@ -276,6 +375,8 @@ def simulate_one(row: pd.Series, bars: pd.DataFrame) -> dict:
         "exit_time": last["time"],
         "realized_R": _r(entry, stop, close, direction),
         "path": path,
+        "impulse_fvg_found": impulse_fvg_found,
+        "impulse_fvg_time": impulse_fvg_time,
     }
 
 
@@ -298,6 +399,7 @@ def simulate_fills(
     *,
     es_bars: Optional[pd.DataFrame] = None,
     nq_bars: Optional[pd.DataFrame] = None,
+    impulse_confirm_bars: Optional[int] = IMPULSE_CONFIRM_BARS,
 ) -> pd.DataFrame:
     """Append outcome, exit_price, exit_time, realized_R. Walkes high/low, not target_R."""
     sigs = pd.read_csv(signals) if not isinstance(signals, pd.DataFrame) else signals.copy()
@@ -312,10 +414,11 @@ def simulate_fills(
     for _, row in sigs.iterrows():
         inst = row["instrument"] if "instrument" in row.index else "ES"
         b = _bars_for_instrument(inst, bars, es_bars, nq_bars)
-        rows.append(simulate_one(row, b))
+        rows.append(simulate_one(row, b, impulse_confirm_bars=impulse_confirm_bars))
     extra = pd.DataFrame(rows, index=sigs.index)
-    for col in OUTPUT_COLS:
-        sigs[col] = extra[col]
+    for col in OUTPUT_COLS + IMPULSE_COLS:
+        if col in extra.columns:
+            sigs[col] = extra[col]
     return sigs
 
 
@@ -342,6 +445,7 @@ def spot_check_rows(filled: pd.DataFrame, n: int = 10, seed: int = 42) -> pd.Dat
         "no_fill_timeout",
         "no_fill_50pct",
         "no_fill_by_eod",
+        "no_impulse_exit",
     ]
     present = [o for o in outcomes if (filled["outcome"] == o).any()]
     if not present:
@@ -373,12 +477,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--spot-check", type=int, default=0, help="Print N stratified traces")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--spot-out", help="Write spot-check traces to this text file")
+    p.add_argument(
+        "--impulse-confirm-bars",
+        type=int,
+        default=IMPULSE_CONFIRM_BARS,
+        help="SMT_IN_FVG: flatten at Nth bar close if no directional FVG. 0 disables.",
+    )
     args = p.parse_args(argv)
     es = pd.read_csv(args.es_bars) if args.es_bars else None
     nq = pd.read_csv(args.nq_bars) if args.nq_bars else None
     bars = pd.read_csv(args.bars) if args.bars else None
     sigs = pd.read_csv(args.signals)
-    out = simulate_fills(sigs, bars, es_bars=es, nq_bars=nq)
+    out = simulate_fills(
+        sigs, bars, es_bars=es, nq_bars=nq, impulse_confirm_bars=args.impulse_confirm_bars
+    )
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out, index=False)
     print(out["outcome"].value_counts().to_string())
@@ -391,7 +503,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         bars_p = prepare_bars(bars) if bars is not None else None
         for idx, row in sample.iterrows():
             b = _bars_for_instrument(row.get("instrument", "ES"), bars_p, es_p, nq_p)
-            traced = simulate_one(row, b)
+            traced = simulate_one(row, b, impulse_confirm_bars=args.impulse_confirm_bars)
             traces.append(_format_spot(idx, row, traced))
         text = "\n\n".join(traces)
         print("\n" + text)

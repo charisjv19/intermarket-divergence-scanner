@@ -32,12 +32,32 @@ class TestPnlStats(unittest.TestCase):
         self.assertEqual(list(fun["outcome"]), [
             "win",
             "loss",
+            "no_impulse_exit",
             "no_fill_timeout",
             "no_fill_50pct",
             "no_fill_never_traded",
             "no_fill_by_eod",
         ])
-        self.assertTrue((fun["count"] == 1).all())
+        counts = dict(zip(fun["outcome"], fun["count"]))
+        self.assertEqual(counts["no_impulse_exit"], 0)
+        self.assertTrue(all(counts[o] == 1 for o in [
+            "win", "loss", "no_fill_timeout", "no_fill_50pct",
+            "no_fill_never_traded", "no_fill_by_eod",
+        ]))
+
+    def test_no_impulse_exit_keeps_actual_R(self):
+        df = pd.DataFrame(
+            {
+                "outcome": ["win", "loss", "no_impulse_exit", "no_fill_by_eod"],
+                "realized_R": [1.5, -1.0, 0.4, 0.8],
+            }
+        )
+        a = compute_stats(df, treat_eod_as_zero=False)
+        b = compute_stats(df, treat_eod_as_zero=True)
+        self.assertEqual(a["n"], 3)
+        self.assertAlmostEqual(a["expectancy"], (1.5 - 1.0 + 0.4) / 3)
+        self.assertEqual(b["n"], 4)
+        self.assertAlmostEqual(b["expectancy"], (1.5 - 1.0 + 0.4 + 0.0) / 4)
 
     def test_eod_as_zero_lowers_expectancy_vs_exclude(self):
         df = pd.DataFrame(
