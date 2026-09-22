@@ -62,7 +62,7 @@ CSV_COLS = [
 ]
 
 NO_POS = ("no_fill_never_traded", "no_fill_timeout", "no_fill_50pct")
-HAS_R = ("win", "loss", "no_fill_by_eod")
+HAS_R = ("win", "loss", "no_fill_by_eod", "no_impulse_exit")
 
 
 def _to_et(ts) -> Optional[pd.Timestamp]:

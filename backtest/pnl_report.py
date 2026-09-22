@@ -6,7 +6,9 @@ bootstrap 95% CI on expectancy, profit factor, one-sided binomial
 test vs 25% breakeven. Uses realized_R, never target_R.
 
 no_fill_never_traded / no_fill_timeout / no_fill_50pct are excluded
-from WR/expectancy (no position). Two views of no_fill_by_eod:
+from WR/expectancy (no position). no_impulse_exit is a filled position
+and is included with its actual realized_R (never forced to -1R or 0R).
+Two views of no_fill_by_eod:
   (1) excluded  (2) included as 0R breakeven
 """
 
@@ -29,6 +31,7 @@ from backtest.simulate_fills import GAP_DISCLOSURE, simulate_fills
 
 RESOLVED = ("win", "loss")
 EOD = "no_fill_by_eod"
+IMPULSE = "no_impulse_exit"
 NO_POS = ("no_fill_never_traded", "no_fill_timeout", "no_fill_50pct")
 Z95 = 1.959963984540054
 BOOTSTRAP_N = 10_000
@@ -88,13 +91,14 @@ def max_drawdown(equity: np.ndarray) -> float:
 
 def _sample(filled: pd.DataFrame, treat_eod_as_zero: bool) -> pd.DataFrame:
     work = filled.copy()
+    has_impulse = work["outcome"] == IMPULSE
     if treat_eod_as_zero:
-        mask = work["outcome"].isin(RESOLVED) | (work["outcome"] == EOD)
+        mask = work["outcome"].isin(RESOLVED) | (work["outcome"] == EOD) | has_impulse
         out = work.loc[mask].copy()
         eod = out["outcome"] == EOD
         out.loc[eod, "realized_R"] = 0.0
         return out
-    return work.loc[work["outcome"].isin(RESOLVED)].copy()
+    return work.loc[work["outcome"].isin(RESOLVED) | has_impulse].copy()
 
 
 def compute_stats(filled: pd.DataFrame, *, treat_eod_as_zero: bool = False) -> dict:
@@ -129,6 +133,7 @@ def funnel(filled: pd.DataFrame) -> pd.DataFrame:
     order = [
         "win",
         "loss",
+        "no_impulse_exit",
         "no_fill_timeout",
         "no_fill_50pct",
         "no_fill_never_traded",
@@ -209,9 +214,10 @@ def breakdown(filled: pd.DataFrame, col: str, treat_eod_as_zero: bool) -> str:
         lines.append(
             f"  {key}: n={s['n']}  WR={_fmt_pct(s['win_rate'])}  "
             f"E={_fmt_r(s['expectancy'])}  PF={_fmt_r(s['profit_factor']).replace('R','')}  "
-            f"funnel win/loss/to/50/never/eod="
+            f"funnel win/loss/imp/to/50/never/eod="
             f"{int((grp.outcome=='win').sum())}/"
             f"{int((grp.outcome=='loss').sum())}/"
+            f"{int((grp.outcome=='no_impulse_exit').sum())}/"
             f"{int((grp.outcome=='no_fill_timeout').sum())}/"
             f"{int((grp.outcome=='no_fill_50pct').sum())}/"
             f"{int((grp.outcome=='no_fill_never_traded').sum())}/"
@@ -282,7 +288,7 @@ def render_report(filled: pd.DataFrame, *, label: str) -> str:
                     lines.append(f"    {row['outcome']:<22} {int(row['count']):4d}  {row['pct']:5.1f}%")
     lines += [
         "",
-        "2. Stats — no_fill_by_eod EXCLUDED (resolved win/loss only; realized_R not target_R)",
+        "2. Stats — no_fill_by_eod EXCLUDED (win/loss/no_impulse_exit; realized_R not target_R)",
         _stats_block("", s1).lstrip("\n"),
         f"  max drawdown (equity): {_fmt_r(max_drawdown(eq1['equity'].to_numpy() if len(eq1) else np.array([])))}",
         "",

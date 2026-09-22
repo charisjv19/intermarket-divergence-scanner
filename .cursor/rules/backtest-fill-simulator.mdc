@@ -7,9 +7,9 @@ alwaysApply: true
 # Fill simulator (`backtest/simulate_fills.py`)
 
 Walks real 1-minute OHLC from each v8.8 signal. Outcomes are `win`,
-`loss`, `no_fill_never_traded`, `no_fill_timeout`, `no_fill_50pct`,
-and `no_fill_by_eod`. `realized_R` comes from the simulated exit,
-**not** from `target_R`. Do not invent a fill.
+`loss`, `no_impulse_exit`, `no_fill_never_traded`, `no_fill_timeout`,
+`no_fill_50pct`, and `no_fill_by_eod`. `realized_R` comes from the
+simulated exit, **not** from `target_R`. Do not invent a fill.
 
 SMT_IN_FVG is a market fill at the confirmation-bar **close**. That
 bar's high/low already printed, so stop/target checks start on the
@@ -24,8 +24,9 @@ level. Never use the close to decide a stop or target.
 - LONG stop: `low <= stop_loss`. LONG target: `high >= take_profit`.
 - SHORT stop: `high >= stop_loss`. SHORT target: `low <= take_profit`.
 - A bar that opens through the stop is a loss; a bar that opens through
-  the target is a win. Close is used only as the SMT_IN_FVG fill price
-  and as the flatten price on `no_fill_by_eod`.
+  the target is a win. Close is used only as the SMT_IN_FVG fill price,
+  as the flatten price on `no_fill_by_eod`, and as the flatten price on
+  `no_impulse_exit` (the 7th bar's close, not SL/TP).
 
 ## Same-bar ambiguity — stop first
 
@@ -56,6 +57,44 @@ not lump timeout / 50% / never-traded into a single `no_fill`.
 
 Same-bar: if the limit fills on a bar that also prints the 50%
 level, take the fill (the 50% cancel is only while unfilled).
+
+## SMT_IN_FVG 7-bar impulse confirmation (experimental)
+
+Hypothesis-test post-entry management in the fill simulator only.
+Not a scanner change and **not** tagged v8.8.1. Entry is unchanged:
+SMT_IN_FVG still market-fills at the confirmation-bar close; SL/TP
+levels are the scanner's.
+
+Starting from the **entry bar** (confirmation close), walk forward
+up to **7** 1-minute tape bars inclusive. A valid FVG in the
+**trade's direction** uses the same 3-bar window as `find_fvg()` /
+`find_preexisting_fvg()`:
+
+- LONG: previous high < next low. SHORT: previous low > next high.
+- The three bars must be consecutive 1-minute clocks
+  (`fvg_window_is_contiguous` session-gap guard). A 14:29→07:30
+  triplet is rejected.
+- Product size bounds match the scanner (ES 0.5–25, NQ 3–150).
+- Do **not** apply `swept_extreme` mid or `fvg_in_session()` cutoff.
+  The position is already live.
+
+The FVG window's first bar is the entry bar or later (no lookback
+before entry). A window completing on bar 7 counts. If such an FVG
+prints, the trade continues to the existing stop/target (bar 7
+itself is then eligible for SL/TP).
+
+If **no** such FVG has printed by the 7th bar, close immediately at
+that bar's **close** (`no_impulse_exit`). Do not use SL or TP even
+if that bar's high/low printed them. `realized_R` is entry→close
+(small win, breakeven, or partial loss — never forced to −1R).
+This is a filled position: include it in expectancy/PF with actual
+R; it is not a no-fill.
+
+SL/TP remain active on bars 1–6 (and on bar 7 only if the FVG
+confirmed). If flatten time arrives before the 7th bar without an
+FVG, existing `no_fill_by_eod` applies — the impulse rule only
+fires at the 7th bar. FVG_AFTER_SMT is unaffected. Disable with
+`impulse_confirm_bars=0`.
 
 ## Session-end handling
 

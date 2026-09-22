@@ -281,7 +281,7 @@ class TestLimitCancelsAndMorningExtend(unittest.TestCase):
         for m in range(0, 45):
             rows.append((f"2026-09-17 10:{m:02d}", 100.0, 100.2, 99.8, 100.0))
         rows.append(("2026-09-17 10:45", 100.1, 103.5, 100.0, 103.2))
-        out = simulate_one(_sig(smt_time=datetime(2026, 9, 17, 9, 46, tzinfo=ET)), _bars(rows))
+        out = simulate_one(_sig(smt_time=datetime(2026, 9, 17, 9, 46, tzinfo=ET)), _bars(rows), impulse_confirm_bars=0)
         self.assertEqual(out["outcome"], "win")
         self.assertEqual(out["exit_price"], 103.0)
 
@@ -293,7 +293,7 @@ class TestLimitCancelsAndMorningExtend(unittest.TestCase):
         for m in range(0, 30):
             rows.append((f"2026-09-17 10:{m:02d}", 100.0, 100.2, 99.8, 100.1))
         rows.append(("2026-09-17 10:45", 100.1, 103.5, 100.0, 103.2))
-        out = simulate_one(_sig(smt_time=datetime(2026, 9, 17, 9, 45, tzinfo=ET)), _bars(rows))
+        out = simulate_one(_sig(smt_time=datetime(2026, 9, 17, 9, 45, tzinfo=ET)), _bars(rows), impulse_confirm_bars=0)
         self.assertEqual(out["outcome"], "no_fill_by_eod")
         self.assertLess(_to_et_min(out["exit_time"]), "10:30")
 
@@ -310,6 +310,7 @@ class TestLimitCancelsAndMorningExtend(unittest.TestCase):
                 smt_time=datetime(2026, 9, 17, 14, 50, tzinfo=ET),
             ),
             _bars(rows),
+            impulse_confirm_bars=0,
         )
         self.assertEqual(out["outcome"], "no_fill_by_eod")
         self.assertEqual(pd.Timestamp(out["exit_time"]).tz_convert(ET).strftime("%H:%M"), "14:59")
@@ -317,6 +318,62 @@ class TestLimitCancelsAndMorningExtend(unittest.TestCase):
 
 def _to_et_min(ts):
     return pd.Timestamp(ts).tz_convert(ET).strftime("%H:%M")
+
+
+class TestImpulseConfirm(unittest.TestCase):
+    """SMT_IN_FVG 7-bar impulse FVG. Entry is unchanged; management only."""
+
+    def test_fvg_within_7_bars_continues_to_tp(self):
+        """LONG gap completes at bar 3 (entry, +1, +2); TP on bar 4."""
+        bars = _bars(
+            [
+                ("2026-09-17 09:00", 100.0, 100.2, 99.8, 100.0),  # entry; ph=100.2
+                ("2026-09-17 09:01", 100.1, 100.5, 100.0, 100.2),
+                ("2026-09-17 09:02", 100.8, 101.0, 100.8, 100.9),  # nl=100.8 > 100.2, size=0.6
+                ("2026-09-17 09:03", 101.0, 103.5, 100.9, 103.2),
+            ]
+        )
+        out = simulate_one(_sig(), bars)
+        self.assertEqual(out["outcome"], "win")
+        self.assertEqual(out["exit_price"], 103.0)
+        self.assertAlmostEqual(out["realized_R"], 3.0)
+        self.assertTrue(out["impulse_fvg_found"])
+        self.assertEqual([s["action"] for s in out["path"]], [
+            "market_fill_at_close", "open", "impulse_fvg", "target",
+        ])
+
+    def test_no_fvg_within_7_bars_exits_at_close(self):
+        """Bar 7 prints through TP and SL; still flatten at that close, not ±R."""
+        rows = [("2026-09-17 09:00", 100.0, 100.3, 99.8, 100.0)]
+        for m in range(1, 6):
+            rows.append((f"2026-09-17 09:{m:02d}", 100.0, 100.3, 99.8, 100.1))
+        # 7th bar (09:06): high through TP, low through SL, close 100.4 → +0.4R
+        rows.append(("2026-09-17 09:06", 100.2, 103.5, 98.5, 100.4))
+        rows.append(("2026-09-17 09:07", 100.4, 103.5, 100.0, 103.2))  # must not be used
+        out = simulate_one(_sig(), _bars(rows))
+        self.assertEqual(out["outcome"], "no_impulse_exit")
+        self.assertEqual(out["exit_price"], 100.4)
+        self.assertAlmostEqual(out["realized_R"], 0.4)
+        self.assertFalse(out["impulse_fvg_found"])
+        self.assertEqual(out["path"][-1]["action"], "no_impulse_exit")
+        self.assertEqual(pd.Timestamp(out["exit_time"]).tz_convert(ET).strftime("%H:%M"), "09:06")
+
+    def test_fvg_exactly_at_bar_7_continues_to_tp(self):
+        """Window (bar 5, 6, 7) is the last eligible FVG; trade then hits TP on bar 8."""
+        rows = [("2026-09-17 09:00", 100.0, 100.3, 99.8, 100.0)]
+        for m in range(1, 4):
+            rows.append((f"2026-09-17 09:{m:02d}", 100.0, 100.3, 99.8, 100.1))
+        rows.append(("2026-09-17 09:04", 100.1, 100.2, 99.9, 100.1))  # bar 5; ph=100.2
+        rows.append(("2026-09-17 09:05", 100.2, 100.6, 100.0, 100.3))  # bar 6
+        rows.append(("2026-09-17 09:06", 100.8, 101.0, 100.8, 100.9))  # bar 7; nl=100.8, size=0.6
+        rows.append(("2026-09-17 09:07", 101.0, 103.5, 100.9, 103.2))
+        out = simulate_one(_sig(), _bars(rows))
+        self.assertEqual(out["outcome"], "win")
+        self.assertEqual(out["exit_price"], 103.0)
+        self.assertAlmostEqual(out["realized_R"], 3.0)
+        self.assertTrue(out["impulse_fvg_found"])
+        self.assertEqual(out["path"][-2]["action"], "impulse_fvg")
+        self.assertEqual(pd.Timestamp(out["impulse_fvg_time"]).tz_convert(ET).strftime("%H:%M"), "09:06")
 
 
 if __name__ == "__main__":
