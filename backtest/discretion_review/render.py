@@ -175,7 +175,7 @@ def _mark_named_swings(ax, clipped: pd.DataFrame, x, row: pd.Series, side: str) 
             label,
             (xi, float(px)),
             textcoords="offset points",
-            xytext=(6, 6),
+            xytext=(-16, 8) if label == "sw1" else (8, 8),
             color="#ffffff",
             fontsize=8,
             fontweight="bold",
@@ -183,34 +183,25 @@ def _mark_named_swings(ax, clipped: pd.DataFrame, x, row: pd.Series, side: str) 
         )
 
 
-def _hline(ax, y, color, ls, lw, label) -> None:
-    ax.axhline(y, color=color, linestyle=ls, linewidth=lw, zorder=5)
-    ax.text(
-        0.995,
-        y,
-        f" {label}",
-        transform=ax.get_yaxis_transform(),
-        va="center",
-        ha="right",
-        color=color,
-        fontsize=7,
-        zorder=8,
-        clip_on=False,
-    )
+def _hline(ax, y, color, ls, lw, label, handles) -> None:
+    line = ax.axhline(y, color=color, linestyle=ls, linewidth=lw, zorder=5, label=label)
+    handles.append(line)
 
 
-def _fvg_box(ax, clipped: pd.DataFrame, x, row: pd.Series, decision) -> None:
+def _fvg_box(ax, clipped: pd.DataFrame, row: pd.Series):
     etype = str(row["entry_type"])
     if etype == "SMT_IN_FVG":
         lo, hi = row.get("pre_fvg_low"), row.get("pre_fvg_high")
         mid_ts = row.get("pre_fvg_bar")
+        box_label = "pre-FVG"
     elif etype == "FVG_AFTER_SMT":
         lo, hi = row.get("fvg_low"), row.get("fvg_high")
         mid_ts = row.get("fvg_bar")
+        box_label = "FVG"
     else:
-        return
+        return None
     if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
-        return
+        return None
     lo, hi = float(lo), float(hi)
     color = FVG_LONG if str(row["direction"]).upper() == "LONG" else FVG_SHORT
     x0 = 0.0
@@ -219,40 +210,55 @@ def _fvg_box(ax, clipped: pd.DataFrame, x, row: pd.Series, decision) -> None:
         if mid_x is not None:
             x0 = max(0.0, mid_x - 1.0)
     x1 = float(len(clipped) - 1) + 0.45
-    ax.add_patch(
-        Rectangle(
-            (x0 - 0.45, lo),
-            x1 - (x0 - 0.45),
-            hi - lo,
-            facecolor=color,
-            edgecolor=color,
-            alpha=0.18,
-            linewidth=1.0,
-            zorder=2,
-        )
+    patch = Rectangle(
+        (x0 - 0.45, lo),
+        x1 - (x0 - 0.45),
+        hi - lo,
+        facecolor=color,
+        edgecolor=color,
+        alpha=0.28,
+        linewidth=1.0,
+        zorder=2,
+        label=box_label,
     )
+    ax.add_patch(patch)
+    return patch
 
 
 def _levels(ax, clipped: pd.DataFrame, row: pd.Series, traded: bool) -> None:
     if not traded:
         return
-    _fvg_box(ax, clipped, None, row, None)
+    handles = []
+    box = _fvg_box(ax, clipped, row)
+    if box is not None:
+        handles.append(box)
     stop = row.get("stop_loss")
     if stop is not None and not pd.isna(stop):
-        _hline(ax, float(stop), STOP, "-", 1.6, "stop")
-    direction = str(row["direction"]).upper()
+        _hline(ax, float(stop), STOP, "-", 1.6, "stop", handles)
     instrument = str(row["instrument"]).upper()
     swept_col = "es_sw2_price" if instrument == "ES" else "nq_sw2_price"
     swept = row.get(swept_col)
     if swept is not None and not pd.isna(swept):
-        _hline(ax, float(swept), SWEPT, "--", 1.1, "swept")
+        _hline(ax, float(swept), SWEPT, "--", 1.1, "swept", handles)
     if str(row["entry_type"]) == "FVG_AFTER_SMT":
         mid = row.get("entry_50")
         if mid is not None and not pd.isna(mid):
-            _hline(ax, float(mid), MID, ":", 1.1, "50%")
+            _hline(ax, float(mid), MID, ":", 1.1, "50%", handles)
         edge = near_edge_price(row)
         if edge is not None:
-            _hline(ax, edge, EDGE, ":", 1.1, "near-edge")
+            _hline(ax, edge, EDGE, ":", 1.1, "near-edge", handles)
+    if handles:
+        ax.legend(
+            handles=handles,
+            loc="upper left",
+            fontsize=7,
+            framealpha=0.82,
+            facecolor=PANEL,
+            edgecolor=GRID,
+            labelcolor=TEXT,
+            borderpad=0.4,
+            handlelength=2.2,
+        )
 
 
 def _pad_ylim(ax, df: pd.DataFrame, extra: list[Optional[float]] = ()) -> None:
@@ -330,8 +336,8 @@ def render_signal(
     ax_nq1 = fig.add_subplot(gs[3])
 
     for ax, df, label, is_15, side in (
-        (ax_es15, es_15, "MES 15m", True, "ES"),
-        (ax_nq15, nq_15, "MNQ 15m", True, "NQ"),
+        (ax_es15, es_15, "MES 15m closed", True, "ES"),
+        (ax_nq15, nq_15, "MNQ 15m closed", True, "NQ"),
         (ax_es1, es_1m, "MES 1m", False, "ES"),
         (ax_nq1, nq_1m, "MNQ 1m", False, "NQ"),
     ):
