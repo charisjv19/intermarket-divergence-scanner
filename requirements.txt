@@ -3,3 +3,5 @@ numpy>=1.26
 requests>=2.32
 # tzdata provides the IANA zoneinfo database (America/New_York).
 tzdata>=2024.1
+matplotlib>=3.8
+pillow>=10

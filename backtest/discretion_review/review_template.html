@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Discretion review (hindsight-blind)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0e1117; color: #d1d4dc; font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 16px; background: #131722; border-bottom: 1px solid #2a2e39; position: sticky; top: 0; z-index: 2; }
+  h1 { font-size: 14px; font-weight: 650; margin: 0; letter-spacing: .02em; }
+  .meta { color: #787b86; }
+  .counts { margin-left: auto; color: #b2b5be; }
+  .progress { height: 4px; background: #2a2e39; }
+  .progress > div { height: 100%; background: #26a69a; width: 0; }
+  main { padding: 12px 16px 24px; }
+  .chart { width: 100%; background: #131722; border: 1px solid #2a2e39; }
+  .chart img { width: 100%; height: auto; display: block; }
+  .missing { display: none; color: #ef5350; padding: 12px 0 0; }
+  .missing.show { display: block; }
+  .help { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 0 0; color: #787b86; font-size: 13px; }
+  kbd { background: #1e222d; border: 1px solid #2a2e39; border-radius: 4px; padding: 1px 6px; color: #d1d4dc; font: 12px ui-monospace, monospace; }
+  .reasons { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; }
+  .reasons button, .toolbar button {
+    background: #1e222d; color: #d1d4dc; border: 1px solid #2a2e39; border-radius: 6px;
+    padding: 6px 10px; cursor: pointer;
+  }
+  .reasons button.active { border-color: #ef5350; color: #ef5350; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px; }
+  .toolbar button.take { border-color: #26a69a; color: #26a69a; }
+  .toolbar button.skip { border-color: #ef5350; color: #ef5350; }
+  .status { min-height: 1.4em; color: #26a69a; }
+  .status.skip { color: #ef5350; }
+  .done { padding: 24px 16px; }
+</style>
+<script>
+/* === REASON LIST (edit this array) ====================================== */
+const REASONS = [
+  { code: 1, label: "no clear impulse" },
+  { code: 2, label: "already extended" },
+  { code: 3, label: "opposing 5m SMT" },
+  { code: 4, label: "macro conflicted" },
+  { code: 5, label: "choppy range" },
+  { code: 6, label: "FVG too small or large" },
+  { code: 7, label: "other" },
+];
+/* ======================================================================= */
+
+const PACK_ID = "__PACK_ID__";
+const CATALOG = __CATALOG_JSON__;
+const STORAGE_KEY = "discretion-review:" + PACK_ID;
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); }
+  catch (e) { return {}; }
+}
+function saveState(state) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+const decisions = loadState();
+let index = firstUnanswered();
+
+function firstUnanswered() {
+  for (let i = 0; i < CATALOG.length; i++) {
+    if (!decisions[CATALOG[i].id]) return i;
+  }
+  return Math.max(0, CATALOG.length - 1);
+}
+
+function reasonByCode(code) {
+  return REASONS.find(r => String(r.code) === String(code));
+}
+
+function current() { return CATALOG[index]; }
+
+function render() {
+  const item = current();
+  const n = CATALOG.length;
+  const done = Object.keys(decisions).length;
+  document.getElementById("pos").textContent = (index + 1) + " / " + n;
+  document.getElementById("done").textContent = done + " decided";
+  const takes = Object.values(decisions).filter(d => d.decision === "take").length;
+  const skips = Object.values(decisions).filter(d => d.decision === "skip").length;
+  document.getElementById("split").textContent = takes + " take · " + skips + " skip";
+  document.getElementById("bar").style.width = (100 * done / n) + "%";
+  const img = document.getElementById("img");
+  const missing = document.getElementById("missing");
+  img.onload = () => missing.classList.remove("show");
+  img.onerror = () => {
+    missing.classList.add("show");
+    missing.textContent = "Chart did not load. Extract the zip fully and open review.html from inside the discretion_review_pilot folder (the images folder must sit next to it). Do not open the HTML from inside the zip or after moving the file alone.";
+  };
+  img.src = item.image;
+  img.alt = item.id;
+  const existing = decisions[item.id];
+  const status = document.getElementById("status");
+  if (existing) {
+    status.className = "status " + existing.decision;
+    const why = existing.reason_label ? (" — " + existing.reason_label) : "";
+    status.textContent = existing.decision.toUpperCase() + why;
+  } else {
+    status.className = "status";
+    status.textContent = "";
+  }
+  document.querySelectorAll(".reasons button").forEach(btn => {
+    btn.classList.toggle("active", !!(existing && existing.decision === "skip" && String(existing.reason_code) === btn.dataset.code));
+  });
+}
+
+function decide(decision, reasonCode) {
+  const item = current();
+  const reason = reasonCode == null ? null : reasonByCode(reasonCode);
+  decisions[item.id] = {
+    id: item.id,
+    stored_order: item.stored_order,
+    decision: decision,
+    reason_code: reason ? reason.code : "",
+    reason_label: reason ? reason.label : "",
+  };
+  saveState(decisions);
+  if (index < CATALOG.length - 1) index += 1;
+  render();
+}
+
+function undo() {
+  const item = current();
+  if (decisions[item.id]) {
+    delete decisions[item.id];
+    saveState(decisions);
+    render();
+    return;
+  }
+  if (index > 0) {
+    index -= 1;
+    const prev = current();
+    delete decisions[prev.id];
+    saveState(decisions);
+    render();
+  }
+}
+
+function csvEscape(v) {
+  const s = String(v == null ? "" : v);
+  if (/[",\n]/.test(s)) return '"' + s.replaceAll('"', '""') + '"';
+  return s;
+}
+
+function downloadCsv() {
+  const header = ["id", "stored_order", "decision", "reason_code", "reason_label"];
+  const rows = [header.join(",")];
+  for (const item of CATALOG) {
+    const d = decisions[item.id];
+    if (!d) continue;
+    rows.push(header.map(k => csvEscape(d[k])).join(","));
+  }
+  const blob = new Blob([rows.join("\n") + "\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "decisions.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function onKey(ev) {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const k = ev.key;
+  if (k === "t" || k === "T") { ev.preventDefault(); decide("take", null); }
+  else if (k === "s" || k === "S") { ev.preventDefault(); decide("skip", null); }
+  else if (k === "Backspace") { ev.preventDefault(); undo(); }
+  else if (/^[0-9]$/.test(k)) {
+    const reason = reasonByCode(k === "0" ? 10 : Number(k));
+    if (reason) { ev.preventDefault(); decide("skip", reason.code); }
+  }
+}
+
+function boot() {
+  const box = document.getElementById("reasons");
+  REASONS.forEach(r => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.code = r.code;
+    b.textContent = r.code + "  " + r.label;
+    b.addEventListener("click", () => decide("skip", r.code));
+    box.appendChild(b);
+  });
+  document.getElementById("take").addEventListener("click", () => decide("take", null));
+  document.getElementById("skip").addEventListener("click", () => decide("skip", null));
+  document.getElementById("undo").addEventListener("click", undo);
+  document.getElementById("dl").addEventListener("click", downloadCsv);
+  window.addEventListener("keydown", onKey);
+  render();
+}
+document.addEventListener("DOMContentLoaded", boot);
+</script>
+</head>
+<body>
+  <header>
+    <h1>Discretion review</h1>
+    <span class="meta">hindsight-blind · stored order · autosave</span>
+    <span class="counts">
+      <span id="pos">0 / 0</span>
+      · <span id="done">0 decided</span>
+      · <span id="split">0 take · 0 skip</span>
+    </span>
+    <button type="button" id="dl">download decisions.csv</button>
+  </header>
+  <div class="progress"><div id="bar"></div></div>
+  <main>
+    <div class="chart"><img id="img" alt="signal" /></div>
+    <p id="missing" class="missing"></p>
+    <p id="status" class="status"></p>
+    <div class="toolbar">
+      <button type="button" class="take" id="take"><kbd>T</kbd> take</button>
+      <button type="button" class="skip" id="skip"><kbd>S</kbd> skip</button>
+      <button type="button" id="undo"><kbd>Backspace</kbd> undo</button>
+    </div>
+    <div class="reasons" id="reasons"></div>
+    <div class="help">
+      <span>Number keys skip with that reason in one press.</span>
+      <span>Any completed prefix is a random sample (fixed stored order).</span>
+    </div>
+  </main>
+</body>
+</html>
