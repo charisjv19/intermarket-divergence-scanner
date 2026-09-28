@@ -46,4 +46,12 @@ completes):
 
 No other depths (25%, 75%, edge ± ticks) were run in this pass.
 
+Combined Step 5 result vs 50% baseline (eq MTM):
+
+- v8.7 −43.015R → −72.535R (Δ −29.520R; worse in all three windows)
+- v8.8 −80.963R → −96.508R (Δ −15.545R; Feb–Apr +1.028R, May–Aug −10.322R, Sep–Jan −6.251R)
+- v8.9 −80.005R → −98.265R (Δ −18.260R; Feb–Apr +0.836R, May–Aug −11.451R, Sep–Jan −7.644R)
+
+Paired day-block 95% CIs on Δ total R all contain 0. Zero trades filled at 50% but not near-edge. Limit rows added no inverted or zero-risk cases (the three v8.9 inverted rows are the existing SMT market entries). Never-traded = 0.
+
 Report artifacts: `/opt/cursor/artifacts/entry_variant_1_near_edge/`.
