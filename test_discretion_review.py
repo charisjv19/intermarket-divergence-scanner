@@ -76,6 +76,8 @@ def _sig(**kwargs) -> pd.Series:
         "nq_sw2_time": "2026-05-01 09:30",
         "nq_sw2_price": 20098.8,
         "combined_15m_bias": "BULLISH",
+        "es_15m_bias": "STRONGLY BULLISH",
+        "nq_15m_bias": "BULLISH (SLOWING)",
         "id": "ab23cd45",
         "window": "mayaug",
     }
@@ -199,6 +201,19 @@ class TestRenderBlind(unittest.TestCase):
             self.assertEqual(scan_path_for_leaks(path), [])
             strip_png_text(path)
             self.assertEqual(scan_path_for_leaks(path), [])
+
+    def test_15m_bias_helpers(self):
+        from backtest.discretion_review.render import bias_aligns, bias_face, detect_15m_swings
+
+        self.assertEqual(bias_aligns("STRONGLY BULLISH", "LONG"), "with")
+        self.assertEqual(bias_aligns("BEARISH (SLOWING)", "LONG"), "against")
+        self.assertNotEqual(bias_face("STRONGLY BULLISH"), bias_face("STRONGLY BEARISH"))
+        tape = _tape("2026-05-01 08:00", 120)
+        bars = clip_15m(tape, datetime(2026, 5, 1, 9, 31, tzinfo=ET), n_bars=16)
+        marked = detect_15m_swings(bars)
+        self.assertGreater(len(marked), 0)
+        self.assertEqual(int(marked.iloc[-1]["swing_high"]), 0)
+        self.assertEqual(int(marked.iloc[-1]["swing_low"]), 0)
 
     def test_html_template_has_no_outcome_words(self):
         html = Path("backtest/discretion_review/review_template.html").read_text(encoding="utf-8")

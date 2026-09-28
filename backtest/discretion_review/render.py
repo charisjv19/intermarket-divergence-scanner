@@ -41,14 +41,56 @@ EDGE = "#80deea"
 SWEPT = "#ce93d8"
 SWING_HI = "#81d4fa"
 SWING_LO = "#f48fb1"
+BIAS_STRONG_BULL = "#1b5e20"
+BIAS_BULL = "#2e7d32"
+BIAS_STRONG_BEAR = "#7f1d1d"
+BIAS_BEAR = "#9b2c2c"
+BIAS_TRANS = "#6b5d12"
+BIAS_UNCLEAR = "#2a2e39"
 
 
-def _naive_et(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series).map(lambda t: to_et(t).tz_localize(None) if to_et(t).tzinfo else t)
+def bias_face(label) -> str:
+    text = str(label or "").upper()
+    slowing = "SLOW" in text
+    if "BULLISH" in text:
+        return BIAS_BULL if slowing else BIAS_STRONG_BULL
+    if "BEARISH" in text:
+        return BIAS_BEAR if slowing else BIAS_STRONG_BEAR
+    if "TRANS" in text:
+        return BIAS_TRANS
+    return BIAS_UNCLEAR
 
 
-def _naive_et(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series).map(lambda t: to_et(t).tz_localize(None) if to_et(t).tzinfo else t)
+def bias_aligns(label, direction: str) -> str:
+    text = str(label or "").upper()
+    d = str(direction).upper()
+    if "BULLISH" in text:
+        return "with" if d == "LONG" else "against"
+    if "BEARISH" in text:
+        return "with" if d == "SHORT" else "against"
+    return "flat"
+
+
+def detect_15m_swings(df: pd.DataFrame) -> pd.DataFrame:
+    """Same 4-bar 15m swing as the scanner. Last bar cannot be confirmed."""
+    out = df.copy()
+    n = len(out)
+    sh = np.zeros(n, dtype=int)
+    sl = np.zeros(n, dtype=int)
+    if n < 4:
+        out["swing_high"] = sh
+        out["swing_low"] = sl
+        return out
+    h = out["high"].to_numpy()
+    l = out["low"].to_numpy()
+    for i in range(3, n):
+        if h[i - 1] > h[i - 2] and h[i - 1] > h[i - 3] and h[i - 1] > h[i]:
+            sh[i - 1] = 1
+        if l[i - 1] < l[i - 2] and l[i - 1] < l[i - 3] and l[i - 1] < l[i]:
+            sl[i - 1] = 1
+    out["swing_high"] = sh
+    out["swing_low"] = sl
+    return out
 
 
 def _body_colors(df: pd.DataFrame) -> np.ndarray:
@@ -279,6 +321,42 @@ def _pad_ylim(ax, df: pd.DataFrame, extra: list[Optional[float]] = ()) -> None:
     ax.set_ylim(lo - pad, hi + pad)
 
 
+def _draw_15m_macro(ax, df: pd.DataFrame, x, bias_label: str, direction: str, name: str) -> None:
+    ax.set_facecolor(bias_face(bias_label))
+    marked = detect_15m_swings(df)
+    highs = [(i, float(df.iloc[i]["high"])) for i in range(len(df)) if int(marked.iloc[i]["swing_high"]) == 1]
+    lows = [(i, float(df.iloc[i]["low"])) for i in range(len(df)) if int(marked.iloc[i]["swing_low"]) == 1]
+    if len(highs) >= 2:
+        ax.plot([p[0] for p in highs], [p[1] for p in highs], color=SWING_HI, linewidth=1.2, zorder=6)
+    if len(lows) >= 2:
+        ax.plot([p[0] for p in lows], [p[1] for p in lows], color=SWING_LO, linewidth=1.2, zorder=6)
+    if highs:
+        ax.scatter([p[0] for p in highs], [p[1] for p in highs], s=18, marker="v", c=SWING_HI, zorder=7)
+    if lows:
+        ax.scatter([p[0] for p in lows], [p[1] for p in lows], s=18, marker="^", c=SWING_LO, zorder=7)
+    for i in range(max(1, len(highs) - 3), len(highs)):
+        tag = "HH" if highs[i][1] > highs[i - 1][1] else "LH"
+        ax.annotate(tag, highs[i], textcoords="offset points", xytext=(2, 6), color=SWING_HI, fontsize=7, fontweight="bold")
+    for i in range(max(1, len(lows) - 3), len(lows)):
+        tag = "HL" if lows[i][1] > lows[i - 1][1] else "LL"
+        ax.annotate(tag, lows[i], textcoords="offset points", xytext=(2, -10), color=SWING_LO, fontsize=7, fontweight="bold")
+    align = bias_aligns(bias_label, direction)
+    badge = f"{name} 15m  {bias_label}  {align} {direction}"
+    ax.text(
+        0.01,
+        0.96,
+        badge,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        color="#ffffff",
+        fontsize=8,
+        fontweight="bold",
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "#000000", "alpha": 0.45, "edgecolor": "none"},
+        zorder=9,
+    )
+
+
 def render_signal(
     row: pd.Series,
     es: pd.DataFrame,
@@ -307,7 +385,8 @@ def render_signal(
     header = (
         f"{sid}   {when.strftime('%Y-%m-%d %H:%M ET')}   "
         f"{row['entry_type']}   {display} {str(row['direction']).upper()}   "
-        f"{row['combined_15m_bias']}   {row['session']}"
+        f"MES {row.get('es_15m_bias', '')} | MNQ {row.get('nq_15m_bias', '')} | "
+        f"comb {row['combined_15m_bias']}   {row['session']}"
     )
     es_px = bar_ohlc(es, decision)
     nq_px = bar_ohlc(nq, decision)
@@ -319,15 +398,15 @@ def render_signal(
         f"L {nq_px['low']:.2f}  C {nq_px['close']:.2f}"
     )
 
-    fig = plt.figure(figsize=(15.2, 10.4), facecolor=BG)
+    fig = plt.figure(figsize=(15.2, 11.2), facecolor=BG)
     gs = fig.add_gridspec(
         4,
         1,
-        height_ratios=[1.05, 1.05, 2.55, 2.55],
-        hspace=0.28,
+        height_ratios=[1.45, 1.45, 2.4, 2.4],
+        hspace=0.32,
         left=0.04,
         right=0.90,
-        top=0.93,
+        top=0.92,
         bottom=0.07,
     )
     ax_es15 = fig.add_subplot(gs[0])
@@ -360,6 +439,16 @@ def render_signal(
             ]
         _pad_ylim(ax, df, extra_lv)
         _time_ticks(ax, df, x, "%m-%d %H:%M" if is_15 else "%H:%M")
+        if is_15:
+            col = "es_15m_bias" if side == "ES" else "nq_15m_bias"
+            _draw_15m_macro(
+                ax,
+                df,
+                x,
+                str(row.get(col, "")),
+                str(row["direction"]).upper(),
+                "MES" if side == "ES" else "MNQ",
+            )
         if not is_15:
             _mark_tape_swings(ax, df, x, decision)
             _mark_named_swings(ax, df, x, row, side)

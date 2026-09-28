@@ -41,6 +41,8 @@ RENDER_COLS = list(BLIND_CSV_COLS) + [
     "nq_sw1_price",
     "nq_sw2_time",
     "nq_sw2_price",
+    "es_15m_bias",
+    "nq_15m_bias",
 ]
 
 DEFAULT_SIGNALS = {

@@ -24,7 +24,9 @@ python -m backtest.discretion_review.build_pack \
 
 Open `review.html` in a browser after extracting the zip. Charts are
 **embedded in that HTML file** (data URIs), so they still show if you open the
-HTML by itself. Keep the `images/` folder if you want the raw PNGs. Keys:
+HTML by itself. Each 15m panel is tinted with that asset's scanner 15m bias,
+shows confirmed 15m HH/HL or LH/LL structure, and a badge
+`MES/MNQ 15m  <bias>  with|against <direction>`. Keys:
 `T` take, `S` skip, `1`–`7` skip+reason, `Backspace` undo. Reasons are a
 `REASONS` array at the top of `review.html` (and in `review_template.html`).
 Autosave is browser `localStorage`; download `decisions.csv` when you want a

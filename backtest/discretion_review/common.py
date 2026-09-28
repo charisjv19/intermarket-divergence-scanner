@@ -29,7 +29,7 @@ ID_ALPHABET = "23456789abcdefghjkmnpqrstvwxyz"
 ID_LEN = 8
 LOOKBACK_BARS = 90
 MAX_LOOKBACK_BARS = 180
-CONTEXT_15M_BARS = 16
+CONTEXT_15M_BARS = 48
 DISPLAY = {"ES": "MES", "NQ": "MNQ"}
 
 HAS_R = ("win", "loss", "no_fill_by_eod")
