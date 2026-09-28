@@ -22,10 +22,13 @@ python -m backtest.discretion_review.build_pack \
   --out /opt/cursor/artifacts/discretion_review_pilot
 ```
 
-Open `review.html` from that folder. Keys: `T` take, `S` skip, `1`–`7`
-skip+reason, `Backspace` undo. Reasons are a `REASONS` array at the top of
-`review.html` (and in `review_template.html`). Autosave is browser
-`localStorage`; download `decisions.csv` when you want a copy.
+Open `review.html` in a browser after extracting the zip. Charts are
+**embedded in that HTML file** (data URIs), so they still show if you open the
+HTML by itself. Keep the `images/` folder if you want the raw PNGs. Keys:
+`T` take, `S` skip, `1`–`7` skip+reason, `Backspace` undo. Reasons are a
+`REASONS` array at the top of `review.html` (and in `review_template.html`).
+Autosave is browser `localStorage`; download `decisions.csv` when you want a
+copy.
 
 The full shuffled order (all May-Aug + Sep-Jan identities) is written to
 `private/order_full.csv` so a later full pack can reuse the same IDs and order.

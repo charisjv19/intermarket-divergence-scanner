@@ -6,7 +6,9 @@ Does not read fill outcomes into HTML, images, or the review CSV.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +16,7 @@ import pandas as pd
 
 from backtest.discretion_review.common import (
     SAMPLE_SEED,
+    leak_hits,
     nearby_shapes,
     prepare_tape,
     scan_path_for_leaks,
@@ -57,12 +60,21 @@ def load_tapes(tape_paths: dict) -> dict:
     return loaded
 
 
+def png_data_uri(path: Path) -> str:
+    return "data:image/png;base64," + base64.standard_b64encode(path.read_bytes()).decode("ascii")
+
+
 def write_html(catalog: list[dict], out_html: Path, pack_id: str) -> None:
     raw = TEMPLATE.read_text(encoding="utf-8")
     html = raw.replace("__PACK_ID__", pack_id).replace(
         "__CATALOG_JSON__", json.dumps(catalog, separators=(",", ":"))
     )
     out_html.write_text(html, encoding="utf-8")
+
+
+def html_for_leak_scan(html: str) -> str:
+    """Drop embedded chart bytes so leak scan does not search base64 noise."""
+    return re.sub(r"const CATALOG = \[.*?\];", "const CATALOG = [];", html, count=1, flags=re.S)
 
 
 def write_spotcheck(rows: pd.DataFrame, tapes: dict, out_path: Path, n: int = SPOTCHECK_N) -> pd.DataFrame:
@@ -160,7 +172,7 @@ def build(
             {
                 "id": row["id"],
                 "stored_order": int(row["stored_order"]),
-                "image": f"images/{row['id']}.png",
+                "image": png_data_uri(png),
             }
         )
 
@@ -175,7 +187,9 @@ def build(
                 "Discretion review PILOT (hindsight-blind).",
                 f"Signals: v8.9 closed-bar live-achievable set, May-Aug + Sep-Jan, n={len(ordered)}.",
                 f"This pack renders the first {n_pilot} of the stored random order (seed {seed}).",
-                "Open review.html locally (file:// is fine). Keys: T take, S skip,",
+                "Open review.html in a browser (double-click after extracting the zip).",
+                "Charts are embedded in that HTML file, so they work even if the",
+                "images folder is missing. Keys: T take, S skip,",
                 "1-7 skip+reason, Backspace undo. Download decisions.csv when done.",
                 "Do not open private/ during review. Scoring is a separate repo script:",
                 "  python -m backtest.discretion_review.score_review \\",
@@ -191,8 +205,12 @@ def build(
 
     review_hits: list[str] = []
     review_hits.extend(scan_tree_for_leaks(images))
+    html_path = out_dir / "review.html"
+    if html_path.is_file():
+        hits = leak_hits(html_for_leak_scan(html_path.read_text(encoding="utf-8")))
+        if hits:
+            review_hits.append(f"{html_path}: text {hits}")
     for p in (
-        out_dir / "review.html",
         out_dir / "README.txt",
         out_dir / "SPOTCHECK.txt",
         private / "id_map.csv",

@@ -205,6 +205,25 @@ class TestRenderBlind(unittest.TestCase):
         self.assertEqual(leak_hits(html), [])
         self.assertIn("const REASONS", html)
         self.assertIn("download decisions.csv", html)
+        self.assertIn("img.onerror", html)
+
+    def test_write_html_embeds_png_bytes(self):
+        from backtest.discretion_review.build_pack import png_data_uri, write_html
+
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "ab23cd45.png"
+            png.write_bytes(
+                b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+            )
+            out = Path(tmp) / "review.html"
+            write_html(
+                [{"id": "ab23cd45", "stored_order": 1, "image": png_data_uri(png)}],
+                out,
+                "pilot-test",
+            )
+            html = out.read_text(encoding="utf-8")
+            self.assertIn("data:image/png;base64,", html)
+            self.assertNotIn("images/ab23cd45.png", html)
 
 
 class TestScoring(unittest.TestCase):
