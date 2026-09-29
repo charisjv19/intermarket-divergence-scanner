@@ -1,3 +1,5 @@
+"""Live v8.8 — tagged OOS scanner, not origin/main."""
+
 from live.runner import main
 
 if __name__ == "__main__":

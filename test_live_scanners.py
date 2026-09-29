@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -14,7 +15,9 @@ import pandas as pd
 from live.feed import pick_active_contract, snapshot
 from live.relay import format_text, identity_str, post_webhook, row_to_payload
 from live.runner import (
+    V88_OOS_SHA256,
     attach_levels,
+    load_scanner,
     new_rows,
     normalize_version,
     process_once,
@@ -181,7 +184,17 @@ class TestRunner(unittest.TestCase):
     def test_v88_keeps_scanner_levels(self):
         out = attach_levels(pd.DataFrame([_signal_row()]), "v8.8")
         self.assertEqual(out.iloc[0]["stop_loss"], 6689.00)
-        self.assertEqual(out.iloc[0]["levels_source"], "scanner_v88")
+        self.assertEqual(out.iloc[0]["levels_source"], "scanner_v88_oos")
+
+    def test_v88_module_is_tagged_oos_not_main(self):
+        root = Path(__file__).resolve().parent
+        data = (root / "smt_scanner_v8_8.py").read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        self.assertEqual(digest, V88_OOS_SHA256)
+        scanner = load_scanner("v8.8")
+        self.assertEqual(scanner.SMT_IN_FVG_CONFIRM_MINS, 1.0)
+        self.assertTrue(hasattr(scanner, "fvg_window_is_contiguous"))
+        self.assertTrue(hasattr(scanner, "merge_es_nq_1m"))
 
     def test_process_once_seeds_then_alerts_new(self):
         first = pd.DataFrame([_signal_row()])

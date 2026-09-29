@@ -1,4 +1,8 @@
-"""Poll ProjectX and emit new v8.7 or v8.8 signals. Scanner logic stays frozen."""
+"""Poll ProjectX and emit new v8.7 or tagged OOS v8.8 signals.
+
+Scanner detection logic stays frozen. v8.8 is the tagged OOS file, not
+origin/main (confirmation clock, session-gap FVG/confirm, inner-join).
+"""
 
 from __future__ import annotations
 
@@ -23,6 +27,9 @@ import projectx_historical_pull as px
 UTC = timezone.utc
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# SHA256 of git show v8.8:smt_scanner_v8_8.py (OOS baseline, not origin/main).
+V88_OOS_SHA256 = "6d3580fbfc7b896db511b6781d5f572b83e941122feb99adf3ad54775efb7e8e"
+
 VERSIONS = {
     "v8.7": {
         "module": "smt_scanner_v8_7",
@@ -32,7 +39,7 @@ VERSIONS = {
     "v8.8": {
         "module": "smt_scanner_v8_8",
         "reconstruct": False,
-        "levels_source": "scanner_v88",
+        "levels_source": "scanner_v88_oos",
     },
 }
 
