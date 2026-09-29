@@ -206,6 +206,10 @@ tempCodeRunnerFile.py
 # Backtest OHLC cache (Piece 1) — pulled API data, do not commit
 backtest/cache/
 
+# Live scanner working state (bar snapshots + already-alerted identities)
+live/state/
+live/bars/
+
 # Ruff stuff:
 .ruff_cache/
 

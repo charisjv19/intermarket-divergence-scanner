@@ -226,6 +226,22 @@ class ProjectXClient:
             )
         return list(data.get("bars") or [])
 
+    def search_contracts(self, search_text: str, *, live: bool = LIVE_BARS) -> list[dict[str, Any]]:
+        """POST /api/Contract/search. Returns up to 20 contracts."""
+        if self.token is None:
+            self.authenticate()
+        data = self._post(
+            "/Contract/search",
+            {"searchText": search_text, "live": live},
+            auth=True,
+        )
+        if not data.get("success", False):
+            raise RuntimeError(
+                f"Contract/search failed: errorCode={data.get('errorCode')} "
+                f"errorMessage={data.get('errorMessage')}"
+            )
+        return list(data.get("contracts") or [])
+
     def pull_range(
         self,
         contract_id: str,
