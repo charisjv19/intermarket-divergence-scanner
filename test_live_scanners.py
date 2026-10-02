@@ -52,9 +52,23 @@ def _signal_row(**kwargs) -> pd.Series:
         "es_close": 6701.00,
         "nq_close": 24810.00,
         "combined_15m_bias": "BULLISH",
+        "es_15m_bias": "STRONGLY BULLISH",
+        "nq_15m_bias": "BULLISH SLOWING",
         "smt5m_status": "none",
+        "es_sw1_time": "2026-09-29 13:10",
+        "es_sw1_price": 6698.00,
+        "es_sw2_time": "2026-09-29 13:24",
+        "nq_sw1_time": "2026-09-29 13:10",
+        "nq_sw1_price": 24820.00,
+        "nq_sw2_time": "2026-09-29 13:24",
+        "confirmations_count": 1,
+        "alt_sw1_times": "",
+        "fvg_bar": "2026-09-29 13:25",
         "fvg_low": 6698.00,
         "fvg_high": 6703.00,
+        "pre_fvg_bar": None,
+        "pre_fvg_low": None,
+        "pre_fvg_high": None,
         "stop_loss": 6689.00,
         "take_profit": 6734.00,
         "target_R": 3.0,
@@ -146,6 +160,60 @@ class TestRelay(unittest.TestCase):
         self.assertIn("FVG_AFTER_SMT LONG MES", text)
         self.assertIn("entry 6700.5", text)
 
+    def test_format_includes_swings_and_fvg(self):
+        payload = row_to_payload(_signal_row(), version="v8.8")
+        text = format_text(payload)
+        self.assertIn("MES  sw1 2026-09-29 13:10 @ 6698", text)
+        self.assertIn("sw2 2026-09-29 13:24 @ 6694", text)
+        self.assertIn("MNQ  sw1 2026-09-29 13:10 @ 24820", text)
+        self.assertIn("sw1s: 1  (primary only)", text)
+        self.assertIn("FVG target: after SMT  2026-09-29 13:25  6698-6703", text)
+
+    def test_format_reports_15m_macro_regime(self):
+        payload = row_to_payload(_signal_row(), version="v8.8")
+        text = format_text(payload)
+        self.assertIn("15m macro: BULLISH  (aligned LONG)", text)
+        self.assertIn("MES STRONGLY BULLISH   MNQ BULLISH SLOWING", text)
+        self.assertIn("5m SMT: none", text)
+        short = row_to_payload(
+            _signal_row(
+                direction="SHORT",
+                combined_15m_bias="BEARISH (SLOWING)",
+                es_15m_bias="STRONGLY BEARISH",
+                nq_15m_bias="BEARISH SLOWING",
+            ),
+            version="v8.8",
+        )
+        short_text = format_text(short)
+        self.assertIn("15m macro: BEARISH (SLOWING)  (aligned SHORT)", short_text)
+        self.assertIn("MES STRONGLY BEARISH   MNQ BEARISH SLOWING", short_text)
+
+    def test_format_lists_each_sw1_when_multiple(self):
+        payload = row_to_payload(
+            _signal_row(confirmations_count=3, alt_sw1_times="13:16, 13:21"),
+            version="v8.7",
+        )
+        text = format_text(payload)
+        self.assertIn("sw1s: 3  13:10 (primary), 13:16, 13:21", text)
+        self.assertNotIn("primary only", text)
+
+    def test_format_smt_in_fvg_uses_preexisting_gap(self):
+        payload = row_to_payload(
+            _signal_row(
+                entry_type="SMT_IN_FVG",
+                fvg_bar=None,
+                fvg_low=float("nan"),
+                fvg_high=float("nan"),
+                pre_fvg_bar="2026-09-29T13:18:00-04:00",
+                pre_fvg_low=6699.25,
+                pre_fvg_high=6701.50,
+            ),
+            version="v8.8",
+        )
+        text = format_text(payload)
+        self.assertIn("FVG target: pre-existing  2026-09-29 13:18  6699.25-6701.5", text)
+        self.assertNotIn("after SMT", text)
+
     def test_webhook_posts_slack_text(self):
         seen = {}
 
@@ -186,7 +254,13 @@ class TestRelay(unittest.TestCase):
         with patch("live.relay.requests.post", fake_post):
             send_test_webhook("v8.8", ["https://hooks.example/x"])
         self.assertEqual(posted[0][0], "https://hooks.example/x")
-        self.assertIn("TEST_WEBHOOK", posted[0][1]["text"])
+        text = posted[0][1]["text"]
+        self.assertIn("TEST_WEBHOOK", text)
+        self.assertIn("MES  sw1", text)
+        self.assertIn("sw1s: 3", text)
+        self.assertIn("FVG target:", text)
+        self.assertIn("15m macro: BULLISH  (aligned LONG)", text)
+        self.assertIn("MES STRONGLY BULLISH   MNQ BULLISH SLOWING", text)
 
 
 class TestLocalEnv(unittest.TestCase):
