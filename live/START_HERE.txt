@@ -1,0 +1,130 @@
+SMT LIVE SCANNERS — start here (Visual Studio Code)
+
+This folder is a self-contained copy of the live v8.7 scanner and the
+tagged OOS v8.8 scanner. They poll TopstepX 1-minute MES/MNQ bars and
+post NEW signals to Slack.
+
+Use Visual Studio Code (VS Code) or Cursor. The Run and Debug configs
+in .vscode/launch.json are for VS Code, not Visual Studio 2022.
+
+Windows steps are below. Mac/Linux notes at the bottom.
+
+
+STEP 1 — Install VS Code and Python
+-----------------------------------
+1. Install VS Code: https://code.visualstudio.com/
+2. Install Python 3.11 or newer: https://www.python.org/downloads/
+   During setup, check "Add python.exe to PATH".
+3. Open VS Code. Extensions (Ctrl+Shift+X) → search "Python"
+   (publisher: Microsoft) → Install.
+
+
+STEP 2 — Unzip and open the folder
+----------------------------------
+1. Unzip smt_live_scanners_local.zip. You should see a folder named
+   smt_live_scanners that contains START_HERE.txt, live\, .vscode\, etc.
+2. In VS Code: File → Open Folder… → select that smt_live_scanners
+   folder (the one that contains START_HERE.txt), then click Select Folder.
+   Do not open your Downloads folder.
+
+
+STEP 3 — Create a virtual environment and install packages
+----------------------------------------------------------
+1. Terminal → New Terminal (Ctrl+`).
+2. Run these three commands, one at a time:
+
+   py -3 -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+
+3. If `py -3` is not found, use `python` instead of `py -3`.
+4. You should see `(.venv)` at the start of the terminal prompt.
+
+
+STEP 4 — Point VS Code at that Python
+-------------------------------------
+1. Ctrl+Shift+P → "Python: Select Interpreter"
+2. Choose the one that shows `.venv` (something like
+   .\ .venv\Scripts\python.exe).
+
+
+STEP 5 — Create your secrets file
+---------------------------------
+1. In the VS Code terminal (still inside smt_live_scanners):
+
+   copy .env.example .env
+
+2. Open the new `.env` file in VS Code. Fill in:
+
+   PROJECTX_USERNAME=your_topstepx_username
+   PROJECTX_API_KEY=your_topstepx_api_key
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+
+   No quotes around the values. Save the file.
+
+
+STEP 6 — Slack webhook (alerts to a channel)
+--------------------------------------------
+1. Browser: https://api.slack.com/apps → Create New App → From scratch.
+   Name it e.g. SMT Live. Pick your workspace.
+2. Left sidebar: Incoming Webhooks → turn On.
+3. Add New Webhook to Workspace → pick the channel (e.g. #smt-live)
+   → Allow.
+4. Copy the Webhook URL. Paste it as SLACK_WEBHOOK_URL in `.env`. Save.
+
+
+STEP 7 — Send a test message to Slack
+-------------------------------------
+1. Left sidebar: Run and Debug (play-with-bug icon), or Ctrl+Shift+D.
+2. Dropdown at the top: "Test Slack webhook (v8.8 OOS)".
+3. Green play button.
+4. Check Slack. You should see a TEST_WEBHOOK message from "SMT v8.8".
+5. Repeat with "Test Slack webhook (v8.7)" if you want both bots verified.
+
+If it errors "No Slack webhook", `.env` is missing SLACK_WEBHOOK_URL
+or VS Code is not using the `.env` next to START_HERE.txt.
+
+
+STEP 8 — Start the live scanners
+--------------------------------
+Keep the laptop awake (sleep stops polling).
+
+Option A — both at once
+  Run and Debug dropdown → "Both live scanners" → green play.
+  Two terminals open. Leave both running.
+
+Option B — one at a time
+  Start "Live v8.7", then start "Live v8.8 OOS" the same way.
+
+You should see a line like:
+  v8.8 live scanner  MES=CON.F.US.MES.Z26  MNQ=CON.F.US.MNQ.Z26  webhooks=1
+
+The first poll SEEDS names already in the last 36 hours. Those do not
+go to Slack. After that, only NEW identities post to Slack and also
+append to:
+  live\state\v87_alerts.jsonl
+  live\state\v88_alerts.jsonl
+
+Stop with the red square in the debug toolbar, or click the terminal
+and press Ctrl+C.
+
+
+Mac / Linux
+-----------
+Same steps, except:
+
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  cp .env.example .env
+
+
+If something fails
+------------------
+- "No module named live" — the opened folder is wrong. Open the folder
+  that contains START_HERE.txt and the live\ directory.
+- Login / retrieveBars errors — check PROJECTX_USERNAME and
+  PROJECTX_API_KEY in `.env`.
+- No Slack post — run the Test Slack webhook config first.
+- Python not found — install Python 3.11+ and tick Add to PATH, then
+  restart VS Code.
