@@ -48,6 +48,7 @@ ALERT_FIELDS = (
     "es_15m_bias",
     "nq_15m_bias",
     "combined_15m_bias",
+    "bias_detail",
     "smt5m_status",
     "levels_source",
 )
@@ -198,6 +199,42 @@ def _fvg_line(payload: dict[str, Any]) -> str:
     return f"FVG target: {kind}  {_fmt_time(bar)}  {_fmt_px(lo)}-{_fmt_px(hi)}"
 
 
+def _label(value: Any, fallback: str = "—") -> str:
+    if not _present(value):
+        return fallback
+    return str(value).strip()
+
+
+def _macro_align(combined: str, direction: str) -> str:
+    combined_u = combined.upper()
+    direction_u = str(direction or "").upper()
+    if "BULLISH" in combined_u and direction_u == "LONG":
+        return "aligned LONG"
+    if "BEARISH" in combined_u and direction_u == "SHORT":
+        return "aligned SHORT"
+    if combined in ("—", "n/a"):
+        return ""
+    if direction_u in ("LONG", "SHORT"):
+        return f"vs {direction_u}"
+    return ""
+
+
+def _macro_lines(payload: dict[str, Any]) -> list[str]:
+    combined = _label(payload.get("combined_15m_bias"))
+    es_bias = _label(payload.get("es_15m_bias"))
+    nq_bias = _label(payload.get("nq_15m_bias"))
+    smt5 = _label(payload.get("smt5m_status"), "n/a")
+    align = _macro_align(combined, str(payload.get("direction") or ""))
+    head = f"15m macro: {combined}"
+    if align:
+        head = f"{head}  ({align})"
+    return [
+        head,
+        f"MES {es_bias}   MNQ {nq_bias}",
+        f"5m SMT: {smt5}",
+    ]
+
+
 def format_text(payload: dict[str, Any]) -> str:
     version = payload.get("version", "?")
     setup = payload.get("entry_type", "?")
@@ -218,10 +255,7 @@ def format_text(payload: dict[str, Any]) -> str:
             f"tp {payload.get('take_profit')}   "
             f"({payload.get('target_R')}R)"
         ),
-        (
-            f"15m {payload.get('combined_15m_bias')}   "
-            f"5m {payload.get('smt5m_status')}"
-        ),
+        *_macro_lines(payload),
         _swing_line(
             "MES",
             payload.get("es_sw1_time"),
@@ -293,7 +327,9 @@ def test_alert_payload(version: str) -> dict[str, Any]:
         "stop_loss": 6689.0,
         "take_profit": 6734.0,
         "target_R": 3.0,
-        "combined_15m_bias": "n/a",
+        "combined_15m_bias": "BULLISH",
+        "es_15m_bias": "STRONGLY BULLISH",
+        "nq_15m_bias": "BULLISH SLOWING",
         "smt5m_status": "n/a",
         "levels_source": "test_webhook",
         "es_sw1_time": "2026-09-29 13:10",

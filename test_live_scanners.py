@@ -52,6 +52,8 @@ def _signal_row(**kwargs) -> pd.Series:
         "es_close": 6701.00,
         "nq_close": 24810.00,
         "combined_15m_bias": "BULLISH",
+        "es_15m_bias": "STRONGLY BULLISH",
+        "nq_15m_bias": "BULLISH SLOWING",
         "smt5m_status": "none",
         "es_sw1_time": "2026-09-29 13:10",
         "es_sw1_price": 6698.00,
@@ -167,6 +169,25 @@ class TestRelay(unittest.TestCase):
         self.assertIn("sw1s: 1  (primary only)", text)
         self.assertIn("FVG target: after SMT  2026-09-29 13:25  6698-6703", text)
 
+    def test_format_reports_15m_macro_regime(self):
+        payload = row_to_payload(_signal_row(), version="v8.8")
+        text = format_text(payload)
+        self.assertIn("15m macro: BULLISH  (aligned LONG)", text)
+        self.assertIn("MES STRONGLY BULLISH   MNQ BULLISH SLOWING", text)
+        self.assertIn("5m SMT: none", text)
+        short = row_to_payload(
+            _signal_row(
+                direction="SHORT",
+                combined_15m_bias="BEARISH (SLOWING)",
+                es_15m_bias="STRONGLY BEARISH",
+                nq_15m_bias="BEARISH SLOWING",
+            ),
+            version="v8.8",
+        )
+        short_text = format_text(short)
+        self.assertIn("15m macro: BEARISH (SLOWING)  (aligned SHORT)", short_text)
+        self.assertIn("MES STRONGLY BEARISH   MNQ BEARISH SLOWING", short_text)
+
     def test_format_lists_each_sw1_when_multiple(self):
         payload = row_to_payload(
             _signal_row(confirmations_count=3, alt_sw1_times="13:16, 13:21"),
@@ -238,6 +259,8 @@ class TestRelay(unittest.TestCase):
         self.assertIn("MES  sw1", text)
         self.assertIn("sw1s: 3", text)
         self.assertIn("FVG target:", text)
+        self.assertIn("15m macro: BULLISH  (aligned LONG)", text)
+        self.assertIn("MES STRONGLY BULLISH   MNQ BULLISH SLOWING", text)
 
 
 class TestLocalEnv(unittest.TestCase):
