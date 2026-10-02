@@ -10,6 +10,6 @@ and inner-join fixes. Do not replace it with main's copy.
     python -m live.v87
     python -m live.v88
 
-Relay: stdout + JSONL. Set SIGNAL_WEBHOOK_URL or SLACK_WEBHOOK_URL to
-also POST each alert (Slack incoming-webhook compatible).
+Relay: stdout + JSONL. Copy `.env.example` to `.env` and set
+`SLACK_WEBHOOK_URL` for Slack. See `live/README.md` for Cursor/VS Code.
 """

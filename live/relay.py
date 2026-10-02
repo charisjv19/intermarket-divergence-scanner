@@ -102,7 +102,7 @@ def format_text(payload: dict[str, Any]) -> str:
     if source:
         levels_note = f"  [{source}]"
     lines = [
-        f"[{version}] {setup} {direction} {inst}{levels_note}",
+        f"*[{version}] {setup} {direction} {inst}*{levels_note}",
         f"{session}  smt {smt}".strip(),
         (
             f"entry {payload.get('entry_price')}   "
@@ -131,6 +131,8 @@ def post_webhook(url: str, payload: dict[str, Any], *, timeout: float = 15.0) ->
     body = {
         "text": text,
         "username": f"SMT {payload.get('version', 'live')}",
+        "icon_emoji": ":chart_with_upwards_trend:",
+        "mrkdwn": True,
     }
     resp = requests.post(url, json=body, timeout=timeout)
     if resp.status_code >= 400:
@@ -147,6 +149,43 @@ def webhook_urls_from_env(env: Optional[dict[str, str]] = None) -> list[str]:
         if value and value not in urls:
             urls.append(value)
     return urls
+
+
+def test_alert_payload(version: str) -> dict[str, Any]:
+    """Synthetic alert used by --test-webhook. Not a market signal."""
+    now = datetime.now(tz=UTC).isoformat()
+    return {
+        "version": version,
+        "identity": f"TEST|{now}|LONG|ES",
+        "relayed_at": now,
+        "smt_time": now,
+        "date": now[:10],
+        "session": "TEST",
+        "direction": "LONG",
+        "instrument": "ES",
+        "display_instrument": "MES",
+        "entry_type": "TEST_WEBHOOK",
+        "entry_price": 0,
+        "stop_loss": 0,
+        "take_profit": 0,
+        "target_R": 0,
+        "combined_15m_bias": "n/a",
+        "smt5m_status": "n/a",
+        "levels_source": "test_webhook",
+    }
+
+
+def send_test_webhook(version: str, webhook_urls: list[str]) -> None:
+    if not webhook_urls:
+        raise RuntimeError(
+            "No Slack webhook. Set SLACK_WEBHOOK_URL in .env "
+            "(or SIGNAL_WEBHOOK_URL / --webhook-url)."
+        )
+    payload = test_alert_payload(version)
+    for url in webhook_urls:
+        post_webhook(url, payload)
+    print(format_text(payload), flush=True)
+    print(f"Posted test alert for {version} to {len(webhook_urls)} webhook(s).", flush=True)
 
 
 def relay(

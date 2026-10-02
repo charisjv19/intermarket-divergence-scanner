@@ -10,6 +10,7 @@ import argparse
 import importlib
 import io
 import json
+import os
 import sys
 import time
 from contextlib import redirect_stdout
@@ -21,7 +22,13 @@ import pandas as pd
 
 from backtest.reconstruct_v87 import reconstruct_signals
 from live.feed import DEFAULT_LOOKBACK_HOURS, snapshot
-from live.relay import identity_str, relay, row_to_payload, webhook_urls_from_env
+from live.relay import (
+    identity_str,
+    relay,
+    row_to_payload,
+    send_test_webhook,
+    webhook_urls_from_env,
+)
 import projectx_historical_pull as px
 
 UTC = timezone.utc
@@ -42,6 +49,28 @@ VERSIONS = {
         "levels_source": "scanner_v88_oos",
     },
 }
+
+
+def load_local_env(root: Optional[Path] = None) -> Optional[Path]:
+    """Load repo-root .env if present. Existing process env wins."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return None
+    path = Path(root or REPO_ROOT) / ".env"
+    if not path.is_file():
+        return None
+    load_dotenv(path, override=False)
+    return path
+
+
+def merge_webhook_urls(cli_urls: Optional[list[str]] = None) -> list[str]:
+    urls = list(webhook_urls_from_env())
+    for raw in cli_urls or []:
+        value = (raw or "").strip()
+        if value and value not in urls:
+            urls.append(value)
+    return urls
 
 
 def normalize_version(raw: str) -> str:
@@ -319,25 +348,38 @@ def build_parser(version: Optional[str] = None) -> argparse.ArgumentParser:
     parser.add_argument("--nq-contract", default=None)
     parser.add_argument("--webhook-url", action="append", default=None)
     parser.add_argument(
+        "--test-webhook",
+        action="store_true",
+        help="Post one test message to Slack/webhook and exit (no market poll)",
+    )
+    parser.add_argument(
         "--artifacts-jsonl",
-        default="/opt/cursor/artifacts/live_signals/alerts.jsonl",
-        help="Also append alerts here (empty string to disable)",
+        default=None,
+        help="Also append alerts here. Default: LIVE_ARTIFACTS_JSONL or disabled.",
     )
     return parser
 
 
 def main(argv: Optional[list[str]] = None, *, version: Optional[str] = None) -> int:
+    load_local_env()
     parser = build_parser(version=version)
     args = parser.parse_args(argv)
     if not args.version:
         parser.error("--version is required")
-    artifacts = Path(args.artifacts_jsonl) if args.artifacts_jsonl else None
+    webhook_urls = merge_webhook_urls(args.webhook_url)
+    if args.test_webhook:
+        send_test_webhook(normalize_version(args.version), webhook_urls)
+        return 0
+    artifacts_raw = args.artifacts_jsonl
+    if artifacts_raw is None:
+        artifacts_raw = os.environ.get("LIVE_ARTIFACTS_JSONL", "")
+    artifacts = Path(artifacts_raw) if artifacts_raw else None
     loop(
         args.version,
         once=args.once,
         seed_seen=not args.alert_existing,
         lookback_hours=args.lookback_hours,
-        webhook_urls=args.webhook_url,
+        webhook_urls=webhook_urls,
         es_contract=args.es_contract,
         nq_contract=args.nq_contract,
         artifacts_jsonl=artifacts,

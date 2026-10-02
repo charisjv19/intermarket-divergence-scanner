@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -13,11 +14,19 @@ from unittest.mock import patch
 import pandas as pd
 
 from live.feed import pick_active_contract, snapshot
-from live.relay import format_text, identity_str, post_webhook, row_to_payload
+from live.relay import (
+    format_text,
+    identity_str,
+    post_webhook,
+    row_to_payload,
+    send_test_webhook,
+)
 from live.runner import (
     V88_OOS_SHA256,
     attach_levels,
+    load_local_env,
     load_scanner,
+    merge_webhook_urls,
     new_rows,
     normalize_version,
     process_once,
@@ -155,7 +164,46 @@ class TestRelay(unittest.TestCase):
             post_webhook("https://hooks.example/x", row_to_payload(_signal_row(), version="v8.7"))
         self.assertEqual(seen["url"], "https://hooks.example/x")
         self.assertIn("[v8.7]", seen["json"]["text"])
+        self.assertTrue(seen["json"]["mrkdwn"])
         self.assertNotIn("payload", seen["json"])
+
+    def test_send_test_webhook_requires_url(self):
+        with self.assertRaises(RuntimeError):
+            send_test_webhook("v8.8", [])
+
+    def test_send_test_webhook_posts(self):
+        posted = []
+
+        def fake_post(url, json=None, timeout=None):
+            posted.append((url, json))
+
+            class Resp:
+                status_code = 200
+                text = "ok"
+
+            return Resp()
+
+        with patch("live.relay.requests.post", fake_post):
+            send_test_webhook("v8.8", ["https://hooks.example/x"])
+        self.assertEqual(posted[0][0], "https://hooks.example/x")
+        self.assertIn("TEST_WEBHOOK", posted[0][1]["text"])
+
+
+class TestLocalEnv(unittest.TestCase):
+    def test_load_dotenv_does_not_override_existing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("SLACK_WEBHOOK_URL=https://from-file\n")
+            with patch.dict(os.environ, {"SLACK_WEBHOOK_URL": "https://already-set"}, clear=False):
+                load_local_env(root)
+                self.assertEqual(os.environ["SLACK_WEBHOOK_URL"], "https://already-set")
+
+    def test_merge_webhook_urls_combines_env_and_cli(self):
+        with patch.dict(os.environ, {"SLACK_WEBHOOK_URL": "https://env", "SIGNAL_WEBHOOK_URL": ""}, clear=False):
+            os.environ.pop("SIGNAL_WEBHOOK_URL", None)
+            urls = merge_webhook_urls(["https://cli"])
+        self.assertEqual(urls[0], "https://env")
+        self.assertIn("https://cli", urls)
 
 
 class TestRunner(unittest.TestCase):
