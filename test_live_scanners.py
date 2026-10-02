@@ -54,13 +54,11 @@ def _signal_row(**kwargs) -> pd.Series:
         "combined_15m_bias": "BULLISH",
         "smt5m_status": "none",
         "es_sw1_time": "2026-09-29 13:10",
-        "es_sw1_price": 6694.00,
+        "es_sw1_price": 6698.00,
         "es_sw2_time": "2026-09-29 13:24",
-        "es_sw2_price": 6690.25,
         "nq_sw1_time": "2026-09-29 13:10",
-        "nq_sw1_price": 24810.00,
+        "nq_sw1_price": 24820.00,
         "nq_sw2_time": "2026-09-29 13:24",
-        "nq_sw2_price": 24802.50,
         "confirmations_count": 1,
         "alt_sw1_times": "",
         "fvg_bar": "2026-09-29 13:25",
@@ -163,9 +161,9 @@ class TestRelay(unittest.TestCase):
     def test_format_includes_swings_and_fvg(self):
         payload = row_to_payload(_signal_row(), version="v8.8")
         text = format_text(payload)
-        self.assertIn("MES  sw1 2026-09-29 13:10 @ 6694", text)
-        self.assertIn("sw2 2026-09-29 13:24 @ 6690.25", text)
-        self.assertIn("MNQ  sw1 2026-09-29 13:10 @ 24810", text)
+        self.assertIn("MES  sw1 2026-09-29 13:10 @ 6698", text)
+        self.assertIn("sw2 2026-09-29 13:24 @ 6694", text)
+        self.assertIn("MNQ  sw1 2026-09-29 13:10 @ 24820", text)
         self.assertIn("sw1s: 1  (primary only)", text)
         self.assertIn("FVG target: after SMT  2026-09-29 13:25  6698-6703", text)
 
