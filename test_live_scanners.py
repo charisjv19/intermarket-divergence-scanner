@@ -53,8 +53,22 @@ def _signal_row(**kwargs) -> pd.Series:
         "nq_close": 24810.00,
         "combined_15m_bias": "BULLISH",
         "smt5m_status": "none",
+        "es_sw1_time": "2026-09-29 13:10",
+        "es_sw1_price": 6694.00,
+        "es_sw2_time": "2026-09-29 13:24",
+        "es_sw2_price": 6690.25,
+        "nq_sw1_time": "2026-09-29 13:10",
+        "nq_sw1_price": 24810.00,
+        "nq_sw2_time": "2026-09-29 13:24",
+        "nq_sw2_price": 24802.50,
+        "confirmations_count": 1,
+        "alt_sw1_times": "",
+        "fvg_bar": "2026-09-29 13:25",
         "fvg_low": 6698.00,
         "fvg_high": 6703.00,
+        "pre_fvg_bar": None,
+        "pre_fvg_low": None,
+        "pre_fvg_high": None,
         "stop_loss": 6689.00,
         "take_profit": 6734.00,
         "target_R": 3.0,
@@ -146,6 +160,41 @@ class TestRelay(unittest.TestCase):
         self.assertIn("FVG_AFTER_SMT LONG MES", text)
         self.assertIn("entry 6700.5", text)
 
+    def test_format_includes_swings_and_fvg(self):
+        payload = row_to_payload(_signal_row(), version="v8.8")
+        text = format_text(payload)
+        self.assertIn("MES  sw1 2026-09-29 13:10 @ 6694", text)
+        self.assertIn("sw2 2026-09-29 13:24 @ 6690.25", text)
+        self.assertIn("MNQ  sw1 2026-09-29 13:10 @ 24810", text)
+        self.assertIn("sw1s: 1  (primary only)", text)
+        self.assertIn("FVG target: after SMT  2026-09-29 13:25  6698-6703", text)
+
+    def test_format_lists_each_sw1_when_multiple(self):
+        payload = row_to_payload(
+            _signal_row(confirmations_count=3, alt_sw1_times="13:16, 13:21"),
+            version="v8.7",
+        )
+        text = format_text(payload)
+        self.assertIn("sw1s: 3  13:10 (primary), 13:16, 13:21", text)
+        self.assertNotIn("primary only", text)
+
+    def test_format_smt_in_fvg_uses_preexisting_gap(self):
+        payload = row_to_payload(
+            _signal_row(
+                entry_type="SMT_IN_FVG",
+                fvg_bar=None,
+                fvg_low=float("nan"),
+                fvg_high=float("nan"),
+                pre_fvg_bar="2026-09-29T13:18:00-04:00",
+                pre_fvg_low=6699.25,
+                pre_fvg_high=6701.50,
+            ),
+            version="v8.8",
+        )
+        text = format_text(payload)
+        self.assertIn("FVG target: pre-existing  2026-09-29 13:18  6699.25-6701.5", text)
+        self.assertNotIn("after SMT", text)
+
     def test_webhook_posts_slack_text(self):
         seen = {}
 
@@ -186,7 +235,11 @@ class TestRelay(unittest.TestCase):
         with patch("live.relay.requests.post", fake_post):
             send_test_webhook("v8.8", ["https://hooks.example/x"])
         self.assertEqual(posted[0][0], "https://hooks.example/x")
-        self.assertIn("TEST_WEBHOOK", posted[0][1]["text"])
+        text = posted[0][1]["text"]
+        self.assertIn("TEST_WEBHOOK", text)
+        self.assertIn("MES  sw1", text)
+        self.assertIn("sw1s: 3", text)
+        self.assertIn("FVG target:", text)
 
 
 class TestLocalEnv(unittest.TestCase):
