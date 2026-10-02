@@ -260,6 +260,38 @@ class TestAuthAndFetch(unittest.TestCase):
             client.authenticate()
         self.assertIn("loginKey failed", str(ctx.exception))
 
+    def test_search_contracts_posts_expected_payload(self):
+        calls = []
+
+        def poster(url, json=None, headers=None, timeout=None):
+            calls.append((url, json, headers))
+            if url.endswith("/Auth/loginKey"):
+                return FakeResponse(200, {"success": True, "errorCode": 0, "token": "tok-1"})
+            return FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "errorCode": 0,
+                    "contracts": [
+                        {
+                            "id": "CON.F.US.MES.Z26",
+                            "name": "MESZ6",
+                            "activeContract": True,
+                            "symbolId": "F.US.MES",
+                        }
+                    ],
+                },
+            )
+
+        client = self._client(poster)
+        rows = client.search_contracts("MES", live=False)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "CON.F.US.MES.Z26")
+        url, payload, headers = calls[1]
+        self.assertTrue(url.endswith("/Contract/search"))
+        self.assertEqual(payload, {"searchText": "MES", "live": False})
+        self.assertEqual(headers["Authorization"], "Bearer tok-1")
+
 
 if __name__ == "__main__":
     unittest.main()
