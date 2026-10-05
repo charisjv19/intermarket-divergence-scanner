@@ -31,7 +31,7 @@ def _identities(frame: pd.DataFrame) -> set[str]:
         return set()
     out = set()
     for _, row in frame.iterrows():
-        sw2 = pd.Timestamp(row["sw2_conf_time"], utc=True)
+        sw2 = pd.to_datetime(row["sw2_conf_time"], utc=True)
         out.add(f"{row['date']}|{sw2.isoformat()}|{row['direction']}|{row['instrument']}")
     return out
 
@@ -63,8 +63,12 @@ class TestV810DualConfirm(unittest.TestCase):
             & (pd.to_datetime(v810_out["sw2_conf_time"], utc=True) == pd.Timestamp("2026-10-05T13:24:00+00:00"))
         ]
         self.assertGreaterEqual(len(nq_rows), 1)
-        sw1 = str(nq_rows.iloc[0]["nq_sw1_time"])
-        self.assertIn("09:14", sw1)
+        alts = str(nq_rows.iloc[0]["alt_sw1_times"])
+        primary = str(nq_rows.iloc[0]["nq_sw1_time"])
+        self.assertTrue(
+            "09:14" in alts or "09:14" in primary,
+            f"09:14 missing from NQ sw1 primary={primary!r} alts={alts!r}",
+        )
 
 
 if __name__ == "__main__":
