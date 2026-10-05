@@ -22,6 +22,16 @@
       "justMyCode": true
     },
     {
+      "name": "Live v8.10 dual-confirm",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "live.v810",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
       "name": "Test Slack webhook (v8.7)",
       "type": "debugpy",
       "request": "launch",
@@ -48,6 +58,11 @@
     {
       "name": "Both live scanners",
       "configurations": ["Live v8.7", "Live v8.8 OOS"],
+      "stopAll": true
+    },
+    {
+      "name": "v8.7 + v8.8 OOS + v8.10",
+      "configurations": ["Live v8.7", "Live v8.8 OOS", "Live v8.10 dual-confirm"],
       "stopAll": true
     }
   ]

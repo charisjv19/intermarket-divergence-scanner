@@ -284,6 +284,7 @@ class TestRunner(unittest.TestCase):
     def test_normalize_version(self):
         self.assertEqual(normalize_version("8.7"), "v8.7")
         self.assertEqual(normalize_version("v88"), "v8.8")
+        self.assertEqual(normalize_version("v810"), "v8.10")
         with self.assertRaises(ValueError):
             normalize_version("v8.9")
 
@@ -317,6 +318,22 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(scanner.SMT_IN_FVG_CONFIRM_MINS, 1.0)
         self.assertTrue(hasattr(scanner, "fvg_window_is_contiguous"))
         self.assertTrue(hasattr(scanner, "merge_es_nq_1m"))
+
+    def test_v810_dual_confirm_does_not_alter_tagged_oos(self):
+        root = Path(__file__).resolve().parent
+        v88 = (root / "smt_scanner_v8_8.py").read_text(encoding="utf-8")
+        v810 = (root / "smt_scanner_v8_10.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "_last_smt_long_nq = None if _last_smt_long_es else detect_smt_v86",
+            v88,
+        )
+        self.assertNotIn("None if _last_smt_long_es else", v810)
+        self.assertNotIn("None if _last_smt_short_es else", v810)
+        out = attach_levels(pd.DataFrame([_signal_row()]), "v8.10")
+        self.assertEqual(out.iloc[0]["levels_source"], "scanner_v810_dual_confirm")
+        scanner = load_scanner("v8.10")
+        self.assertEqual(scanner.SMT_IN_FVG_CONFIRM_MINS, 1.0)
+        self.assertEqual(scanner.SW1_PARALLEL_TOL_MINS, 0)
 
     def test_process_once_seeds_then_alerts_new(self):
         first = pd.DataFrame([_signal_row()])

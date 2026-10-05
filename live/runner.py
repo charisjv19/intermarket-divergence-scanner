@@ -1,7 +1,8 @@
-"""Poll ProjectX and emit new v8.7 or tagged OOS v8.8 signals.
+"""Poll ProjectX and emit new v8.7, tagged OOS v8.8, or v8.10 signals.
 
-Scanner detection logic stays frozen. v8.8 is the tagged OOS file, not
-origin/main (confirmation clock, session-gap FVG/confirm, inner-join).
+Scanner detection logic stays frozen per version. v8.8 is the tagged OOS
+file, not origin/main. v8.10 is a new protocol on that OOS baseline:
+ES-confirm and NQ-confirm are scored independently.
 """
 
 from __future__ import annotations
@@ -48,6 +49,11 @@ VERSIONS = {
         "reconstruct": False,
         "levels_source": "scanner_v88_oos",
     },
+    "v8.10": {
+        "module": "smt_scanner_v8_10",
+        "reconstruct": False,
+        "levels_source": "scanner_v810_dual_confirm",
+    },
 }
 
 
@@ -84,9 +90,13 @@ def normalize_version(raw: str) -> str:
         "v8.8": "v8.8",
         "v88": "v8.8",
         "88": "v8.8",
+        "8.10": "v8.10",
+        "v8.10": "v8.10",
+        "v810": "v8.10",
+        "810": "v8.10",
     }
     if key not in aliases:
-        raise ValueError(f"unsupported scanner version {raw!r}; use v8.7 or v8.8")
+        raise ValueError(f"unsupported scanner version {raw!r}; use v8.7, v8.8, or v8.10")
     return aliases[key]
 
 
