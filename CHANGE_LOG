@@ -6,6 +6,18 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## v8.10 (October 2026)
+
+**New protocol on tagged OOS v8.8. Tagged `smt_scanner_v8_8.py` is not modified.**
+
+### Changed
+- **Dual-confirm SMT** — v8.8 (and v8.7) score an ES-confirm pair first and skip NQ-confirm whenever ES-confirm exists. That drops a valid NQ-confirm / ES-fail SMT on the same sw2 (example: 2026-10-05 NY Morning 09:14 sw1 / 09:24 sw2). v8.10 runs both sides independently. Dedup remains `(date, sw2_conf_time, direction, instrument)`, so ES LONG and NQ LONG at the same sw2 are two identities.
+- No threshold changes. SMT_IN_FVG / FVG_AFTER_SMT clocks, exact sw1/sw2 timestamp match, and FVG search from `sw2_conf_idx` are unchanged from tagged OOS v8.8.
+
+Live: `python -m live.v810` alongside frozen v8.7 and tagged OOS v8.8.
+
+---
+
 ## v8.7 (June 2026)
 
 **Bug fixes identified through manual blind review of Feb 25 signals.**

@@ -1,10 +1,12 @@
 # Live scanners (local + Slack)
 
-Two separate processes. They poll TopstepX closed 1-minute MES/MNQ bars,
-run frozen `smt_scanner_v8_7.py` / tagged OOS `smt_scanner_v8_8.py`, and
-relay only newly appeared identities.
+Separate processes. They poll TopstepX closed 1-minute MES/MNQ bars,
+run frozen `smt_scanner_v8_7.py` / tagged OOS `smt_scanner_v8_8.py` /
+v8.10 `smt_scanner_v8_10.py`, and relay only newly appeared identities.
 
-v8.8 here is the tagged OOS file, not `origin/main`.
+v8.8 here is the tagged OOS file, not `origin/main`. v8.10 is a new
+protocol on that OOS baseline: NQ-confirm SMT can fire even when
+ES-confirm already exists. Do not edit `smt_scanner_v8_8.py` for that.
 
 ## 1. Files you need on your laptop
 
@@ -51,7 +53,9 @@ Run and Debug (`Ctrl+Shift+D` / `Cmd+Shift+D`):
 
 - **Live v8.7** — one terminal, v8.7 only
 - **Live v8.8 OOS** — one terminal, tagged OOS v8.8 only
-- **Both live scanners** — starts both (leave both terminals running)
+- **Live v8.10 dual-confirm** — NQ-confirm even when ES-confirm exists
+- **Both live scanners** — starts v8.7 and v8.8 (leave both terminals running)
+- **v8.7 + v8.8 OOS + v8.10** — all three
 
 First poll seeds identities already in the 36h window (no dump of old names). After that, only new identities go to Slack.
 
@@ -60,8 +64,10 @@ From a terminal instead:
 ```bash
 python -m live.v87 --test-webhook
 python -m live.v88 --test-webhook
+python -m live.v810 --test-webhook
 python -m live.v87
 python -m live.v88
+python -m live.v810
 ```
 
 Keep the laptop awake; sleep stops polling. These are not the Cloud Agent processes.
