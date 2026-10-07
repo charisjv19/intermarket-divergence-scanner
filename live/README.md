@@ -45,6 +45,11 @@ Run **Test Slack webhook (v8.8 OOS)** from Run and Debug. You should see a test 
 
 Without `SLACK_WEBHOOK_URL`, alerts still print in the terminal and append to `live/state/v87_alerts.jsonl` / `v88_alerts.jsonl`.
 
+Chart-vs-Slack misses, late relays, and protocol ideas from live prints
+go in [`LIVE_SCANNER_NOTES.md`](LIVE_SCANNER_NOTES.md) — newest first,
+one block per observation. That log is not a changelog and is not
+permission to edit tagged OOS v8.8.
+
 ## 3. Run in Cursor / VS Code
 
 Install the Python extension. Select the `.venv` interpreter.

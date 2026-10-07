@@ -1,0 +1,12 @@
+# Live scanner notes
+
+When the user reports a live Slack miss, a false alert, late relay, wrong
+sw1/sw2/FVG text, or a protocol idea from a live session, append a dated
+block to `live/LIVE_SCANNER_NOTES.md` (newest first, below the open
+queue). Use the template in that file. Update the open queue if the
+note is a repeating pattern.
+
+Do not treat that log as a license to edit tagged OOS `smt_scanner_v8_8.py`
+or live `smt_scanner_v8_7.py`. Structural bugs vs the current spec can be
+fixed on a feature branch. Protocol changes are a new version. Threshold
+retunes to recover one live print must be flagged before any code change.
