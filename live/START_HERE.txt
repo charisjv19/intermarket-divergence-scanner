@@ -108,6 +108,12 @@ append to:
 Stop with the red square in the debug toolbar, or click the terminal
 and press Ctrl+C.
 
+Live chart-vs-Slack notes (misses, late alerts, protocol ideas) are
+logged in LIVE_SCANNER_NOTES.md in this folder. Add a block at the top
+of the log when something looks wrong. Entries in that file do not
+change v8.7, v8.8, v8.10, or any other open scanner. Version changes
+must be asked for by name and verified before they count as done.
+
 
 Mac / Linux
 -----------
