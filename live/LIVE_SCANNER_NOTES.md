@@ -74,6 +74,7 @@ verification.
 | Q2 | Stale ES-confirm (e.g. 09:08) occupies the exclusive slot and hides a later NQ-confirm (09:18 / 09:36) | v8.8 exclusive only; v8.10 already scores both | watching |
 | Q3 | SMT_IN_FVG clock is sw2+1 close-in-pre-FVG, not “when I see the FVG after SMT” | new protocol if we want fire-at-FVG | open |
 | Q4 | Live poll stalls. 2026-10-06: ~40 min (09:05–09:45 ET) and ~9h (10:44 ET → 19:52 ET). Slack time ≠ identification clock | ops | open |
+| Q8 | Discretionary SMT_IN_FVG fill: limit into the pre-FVG after the alert. Scanner v8.8/v8.10 models market at sw2+1 close | trading plan | watching |
 | Q5 | Primary sw1 is the **oldest** failed parallel; later chart sw1s land in `alt_sw1_times` | format (Slack now prints alts) | watching |
 | Q6 | No live sw1–sw2 age gate. `sw1_is_fresh` is dead; v8.2 60-min limit is not applied. 07:37/09:18 = 101 min | protocol | open |
 | Q7 | v8.7 still allows sw1 parallel ±2 min (`SW1_PARALLEL_TOL_MINS = 2`). v8.8/v8.10 are exact (S3) | protocol on v8.7 only | watching |
@@ -81,6 +82,18 @@ verification.
 ---
 
 ## Log (newest first)
+
+## Trading plan — SMT_IN_FVG as a limit into the pre-FVG (not a scanner edit)
+
+- **Versions:** how I will trade live v8.8 / v8.10 alerts (v8.7 SMT_IN_FVG is a different fill)
+- **Slack:** n/a
+- **Chart:** n/a
+- **Kind:** protocol
+- **Disposition:** open (Q8). Scanner stays market-at-sw2+1. This is my fill, not a version change.
+- **What I saw:** I will trade SMT_IN_FVG as a **limit into the preexisting FVG**, placed after the SMT_IN_FVG alert.
+- **What the scanner did:** v8.8/v8.10 SMT_IN_FVG does **not** fire on the sw2 bar. It fires when **sw2 is confirmed by the next 1-minute bar** (`sw2 + 1 minute` exactly) **and** that bar’s close sits inside a pre-existing 3-bar FVG. `smt_time` is that confirmation bar, not sw2. No post-SMT FVG is required. The scanner’s stored entry is the **market close** of that confirmation bar. Swing markers also have a 4-bar / 1-bar-lag print delay before sw2 even exists in history — that is separate from the sw2+1 membership clock.
+- **Why (if known):** Alert timing = after sw2 confirmation (sw2+1 close in the gap). My limit is into the **same pre-FVG** the scanner used for membership, not a new FVG after SMT. If Slack is late, the close may already have left the gap, so the limit plan depends on Q4 being fixed.
+- **Wanted change:** note only (Q8). Do not change v8.7, v8.8, or v8.10 from this entry.
 
 ## 2026-10-06 13:42 / 13:46 — SMT_IN_FVG Slack at 7:54 PM ET
 
