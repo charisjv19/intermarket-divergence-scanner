@@ -1,6 +1,8 @@
 """
 SMT Setup Scanner v8.10
-Base: tagged OOS v8.8. One protocol change: dual-confirm SMT.
+Base: tagged OOS v8.8. Protocol vs that baseline: dual-confirm SMT,
+plus a 90-minute sw1–sw2 staleness gate (explicit live-review request
+2026-10-07). Tagged OOS v8.8 is not modified.
 
 v8.8 (and v8.7) score an ES-confirm SMT first and skip NQ-confirm whenever
 ES-confirm exists. That drops valid NQ-confirm / ES-fail pairs on the same
@@ -8,7 +10,7 @@ sw2 (e.g. 2026-10-05 09:14/09:24 NY Morning). v8.10 runs both sides
 independently. Dedup is still (date, sw2_conf_time, direction, instrument),
 so ES LONG and NQ LONG at the same sw2 are two identities.
 
-Tagged OOS v8.8 is not modified. No threshold changes.
+Tagged OOS v8.8 is not modified. FVG/macro thresholds unchanged.
 
 Inherited v8.8 audit fixes (S1, S2, S3). Threshold review remains deferred.
 
@@ -81,6 +83,12 @@ PRE_SESSION_LOOKBACK_MINS = 30
 PRIOR_SWING_LOOKBACK    = 20
 SW2_STALENESS_MINS_1M   = 120
 SW2_STALENESS_BARS_5M   = 36
+# [v8.10] sw1 vs sw2 age. Confirm-side sw1 may not be older than this
+# many minutes from confirm-side sw2. Equal to 90 is allowed; 91+ is not.
+# This is independent of SW2_STALENESS_MINS_1M (that gate is sw2 vs the
+# scan bar). v8.2 had 60 minutes; it was left unwired after the v8.5
+# walk-back rewrite. Live 2026-10-06 07:37/09:18 was 101 minutes.
+SW1_STALENESS_MINS      = 90
 # sdf keeps session + pre_session bars only. Consecutive sdf indices are
 # not always consecutive 1-minute bars: NY Afternoon session ends at 14:29
 # (15:00 minus SESSION_CUTOFF_MINS), and the next sdf row is next day's
@@ -652,6 +660,8 @@ def detect_smt_v86(conf_hist, fail_hist, current_et, direction):
         failed_parallels = []
         for sw1c in broken_sw1s:
             p1c, _, t1c = sw1c
+            if not sw1_is_fresh(t1c, t2c):
+                continue
             sw1f = find_parallel_swing(fail_hist, t1c, SW1_PARALLEL_TOL_MINS, sig_date)
             if not sw1f:
                 continue
@@ -794,13 +804,11 @@ def check_fvg_windows_contiguous(signals, sdf):
 # ── [v8.2] STALENESS CHECK ────────────────────────────────────────────────────
 def sw1_is_fresh(t1, t2):
     """
-    sw1 must be within STALENESS_LIMIT_MINS of sw2.
-    Prevents the scanner from using a swing point from an hour ago
-    as the reference for a current SMT.
-    Only applied to 1m SMT detection.
+    True iff confirm-side sw1 is at most SW1_STALENESS_MINS before sw2.
+    Used inside detect_smt_v86 when collecting failed parallels.
     """
     gap_mins = abs((pd.Timestamp(t2)-pd.Timestamp(t1)).total_seconds()) / 60
-    return gap_mins <= STALENESS_LIMIT_MINS
+    return gap_mins <= SW1_STALENESS_MINS
 
 
 def min_stop_points(instrument):
@@ -1314,6 +1322,7 @@ if __name__ == '__main__':
     print(f"sw2 candidates:   last {SW2_CANDIDATES} swings (same day)")
     print(f"Parallel sw1 tol: {SW1_PARALLEL_TOL_MINS} mins")
     print(f"sw2 staleness:    {SW2_STALENESS_MINS_1M} mins (1m) / {SW2_STALENESS_BARS_5M} bars (5m)")
+    print(f"sw1 staleness:    {SW1_STALENESS_MINS} mins vs sw2  [v8.10]")
     print(f"SMT_IN_FVG confirm: exactly {SMT_IN_FVG_CONFIRM_MINS:g} min after sw2 (not FVG_AFTER_SMT)")
     print(f"Dedup:            by sw2_conf_time (not 30-min bucket)  [v8.7]")
     print(f"FVG search from:  sw2 confirmation bar (not signal bar)  [v8.7]")
