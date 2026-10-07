@@ -195,6 +195,30 @@ class TestAuthAndFetch(unittest.TestCase):
         self.assertEqual(payload["endTime"], "2026-02-25T19:00:00Z")
         self.assertEqual(headers["Authorization"], "Bearer tok-1")
 
+    def test_request_timeout_passed_to_session(self):
+        timeouts = []
+
+        def poster(url, json=None, headers=None, timeout=None):
+            timeouts.append(timeout)
+            return FakeResponse(200, {"success": True, "errorCode": 0, "token": "tok-1"})
+
+        default = self._client(poster)
+        default.authenticate()
+        self.assertEqual(timeouts[-1], px.REQUEST_TIMEOUT)
+        self.assertEqual(px.REQUEST_TIMEOUT, 30)
+
+        timeouts.clear()
+        live = px.ProjectXClient(
+            username="user",
+            api_key="key",
+            api_root="https://api.topstepx.com/api",
+            session=default.session,
+            chunk_pause_sec=0,
+            request_timeout=20,
+        )
+        live.authenticate()
+        self.assertEqual(timeouts[-1], 20)
+
     def test_401_reauthenticates_and_retries(self):
         calls = []
 

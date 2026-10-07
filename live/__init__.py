@@ -1,7 +1,8 @@
 """Separate live scanners for frozen v8.7, tagged OOS v8.8, and v8.10.
 
-Each version polls ProjectX closed 1-minute bars, runs that version's
-`run()` unchanged, and relays only newly appeared identities.
+Each version always scores on every new closed 1-minute bar, runs that
+version's `run()` unchanged, and relays only newly appeared identities.
+No Slack post when that version has nothing new.
 
 v8.8 is the tagged OOS scanner (`git show v8.8:smt_scanner_v8_8.py`),
 not origin/main. Do not replace it with main's copy.

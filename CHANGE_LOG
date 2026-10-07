@@ -18,6 +18,17 @@ Live: `python -m live.v810` alongside frozen v8.7 and tagged OOS v8.8.
 
 ---
 
+## Live runner (October 2026)
+
+**Ops only. Frozen v8.7 / tagged OOS v8.8 / v8.10 detection files are not modified.**
+
+- Close loop: 1-minute bar close → wait 1s → incremental pull of that close → each live process scores → Slack only on a new identity.
+- Incremental snapshot reuses the on-disk 36h cache (5-minute overlap) instead of re-pulling 36h every poll.
+- Live `retrieveBars` timeout is 20s (historical pull stays 30s).
+- Catch-up re-poll if a poll overruns the next minute. Extra polls do not post “no alert” to Slack.
+
+---
+
 ## v8.7 (June 2026)
 
 **Bug fixes identified through manual blind review of Feb 25 signals.**

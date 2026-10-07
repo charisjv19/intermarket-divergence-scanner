@@ -175,6 +175,7 @@ class ProjectXClient:
         api_root: str = API_ROOT,
         session: Optional[requests.Session] = None,
         chunk_pause_sec: float = CHUNK_PAUSE_SEC,
+        request_timeout: float = REQUEST_TIMEOUT,
     ):
         if username is None or api_key is None:
             username, api_key = load_credentials()
@@ -183,6 +184,7 @@ class ProjectXClient:
         self.api_root = api_root.rstrip("/")
         self.session = session or requests.Session()
         self.chunk_pause_sec = chunk_pause_sec
+        self.request_timeout = request_timeout
         self.token: Optional[str] = None
 
     def authenticate(self) -> str:
@@ -282,7 +284,7 @@ class ProjectXClient:
                 headers["Authorization"] = f"Bearer {self.token}"
             try:
                 resp = self.session.post(
-                    url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT
+                    url, json=payload, headers=headers, timeout=self.request_timeout
                 )
             except requests.RequestException as exc:
                 last_err = exc
