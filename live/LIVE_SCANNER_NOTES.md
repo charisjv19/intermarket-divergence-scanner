@@ -3,16 +3,25 @@
 Human review log for **live Slack alerts** vs the chart. This is not
 `CHANGE_LOG` (shipped version diffs) and not tagged-OOS evidence.
 
-Frozen files stay frozen:
+**Logging here never changes a running scanner.** An entry, a
+`Wanted change` line, or an open-queue row is observation only. It is
+not a work order, not a bugfix ticket, and not permission to edit,
+retune, push, or cut a new version.
+
+Currently open live versions (do not touch from this log):
 
 - `smt_scanner_v8_7.py` — live v8.7
 - `smt_scanner_v8_8.py` — tagged OOS v8.8
-- Protocol ideas become a **new** scanner version (v8.10+), not a silent
-  edit of those two.
+- `smt_scanner_v8_10.py` — live dual-confirm v8.10
 
-Threshold retunes (`ES_FVG_MIN`, lookahead, etc.) to “get that alert” are
-overfit unless flagged first. Structural/logic mismatches with the
-current spec can be logged as bugs.
+Any version change, patch, push, or new scanner file requires:
+
+1. An **explicit** request to change that version (naming it), and
+2. **Direct verification** of the change before it is treated as done.
+
+Do not infer a code change from “this alert was wrong.” Threshold
+retunes (`ES_FVG_MIN`, lookahead, etc.) to recover one live print are
+overfit unless that explicit request flags them first.
 
 Machine record of what actually posted: `live/state/v87_alerts.jsonl`,
 `v88_alerts.jsonl`, `v810_alerts.jsonl` (gitignored). This file is the
@@ -37,7 +46,7 @@ than deleting a line.
 - **What I saw:**
 - **What the scanner did:**
 - **Why (if known):**
-- **Wanted change:** none | describe (new version, not a v8.8 edit)
+- **Wanted change:** none | note only — does not start a version change
 ```
 
 Kinds:
@@ -55,8 +64,9 @@ Kinds:
 
 ## Open queue
 
-Items to keep watching. Not licensed work until the next live note
-confirms or a new protocol is requested.
+Watch list only. Rows here do **not** start work on v8.7, v8.8, v8.10,
+or any later version. Implementation needs an explicit ask plus
+verification.
 
 | ID | Observation | Suggested track | Status |
 |----|-------------|-----------------|--------|
@@ -80,7 +90,7 @@ confirms or a new protocol is requested.
 - **What I saw:** SMT between 09:18 and 09:36 with FVG after SMT. No v8.8 / v8.7 FVG_AFTER_SMT for that pair.
 - **What the scanner did:** v8.10 `FVG_AFTER_SMT LONG MNQ` identities `2026-10-06|13:18|LONG|NQ` (FVG 09:24, sw1 07:37) and `2026-10-06|13:36|LONG|NQ` (FVG 09:38, primary sw1 08:26, alts `08:37, 09:00, 09:18`). v8.8 `run()` on the same bars: no Oct 6 signals. v8.7 Oct 6: only 08:37 MNQ FVG_AFTER_SMT.
 - **Why (if known):** v8.8/v8.7 ES-first exclusive stayed on an **older ES-confirm** MES 08:01 `7862.25` → 09:08 `7861.25` / MNQ HL `31502` → `31507`. That candidate never got a valid MES FVG inside 15 bars above the swept low `7861.25`, so exclusive mode emitted nothing and never scored the NQ-confirm. 09:18/09:36 are not ES-confirm (MES HL / equal). Combined 15m was `BULLISH (SLOWING)` — macro did not block. Artifact: `/opt/cursor/artifacts/smt_0918_0936_diagnosis.txt`.
-- **Wanted change:** keep watching v8.10 for this pattern. Do not patch tagged OOS v8.8. If exclusive-mode v8.8 should drop a stale ES SMT in favor of a newer NQ SMT, that is a new protocol (Q2), not a v8.8 bugfix.
+- **Wanted change:** note only (Q1/Q2). Do not patch v8.7, v8.8, or v8.10 from this entry.
 
 ## 2026-10-06 07:30 / 07:37 — expected SMT_IN_FVG, none fired
 
@@ -92,7 +102,7 @@ confirms or a new protocol is requested.
 - **What I saw:** 07:30/07:37 looked like SMT into a gap.
 - **What the scanner did:** `detect_smt` LONG none. Pre-session FVG is not a valid FVG_AFTER_SMT formation window (`fvg_in_session` only). SMT_IN_FVG can *membership-match* a pre-session gap, but only after a real SMT.
 - **Why (if known):** No exact-timestamp parallel swing lows at 07:30 (NQ is SH). MES did not wick-break 07:30 at 07:37 (`7857.00` > `7855.75`). Not a dual-confirm miss.
-- **Wanted change:** none unless we redefine pre-session FVG_AFTER_SMT (protocol; do not sneak into OOS v8.8).
+- **Wanted change:** none. Note only.
 
 ## 2026-10-06 ~09:46 ET — v8.10 Slack late vs FVG bars
 
@@ -104,7 +114,7 @@ confirms or a new protocol is requested.
 - **What I saw:** Alerts arrived ~8–22 minutes after the FVG bars (and after a long poll gap).
 - **What the scanner did:** Live wrapper runs full-window `run()` on closed 1m bars, then relays new identities only. A slow poll holds both signals until that cycle finishes.
 - **Why (if known):** Not a detection miss on v8.10. Slack timestamp is relay time, not `fvg_bar`.
-- **Wanted change:** ops — shorten scan/poll if this keeps happening. Do not treat late Slack as “scanner skipped the SMT.”
+- **Wanted change:** note only (Q4). Late Slack is not a detection miss. Do not change the runner from this entry.
 
 ## 2026-10-05 09:14 / 09:24 — NQ-confirm blocked; ES path did fire
 
@@ -116,7 +126,7 @@ confirms or a new protocol is requested.
 - **What I saw:** 09:14/09:24 looked like the SMT pair; Slack sw1 was 08:20.
 - **What the scanner did:** Same sw2 09:24. Oldest failed-parallel is primary sw1; later parallels go to `alt_sw1_times` (Slack lists them). v8.7 SMT_IN_FVG still required the post-SMT FVG in that version (09:27). v8.8 S2 SMT_IN_FVG is sw2+1 membership; that morning’s ES path was FVG_AFTER_SMT because 09:25 close had left the 09:17 FVG.
 - **Why (if known):** ES-first exclusive. Primary sw1 = oldest, not the chart’s most obvious later swing.
-- **Wanted change:** v8.10 already independent. Slack already prints alt sw1s. No v8.8 edit.
+- **Wanted change:** note only (Q1/Q5). No version edit from this entry.
 
 ## 2026-10-05 08:37 — v8.7 MNQ FVG_AFTER_SMT, not v8.8
 
@@ -128,4 +138,4 @@ confirms or a new protocol is requested.
 - **What I saw:** v8.7 alert, no matching v8.8.
 - **What the scanner did:** v8.7 `SW1_PARALLEL_TOL_MINS = 2`. Tagged OOS v8.8 is exact timestamp only (`0`).
 - **Why (if known):** Defect S3. Do not loosen v8.8 sw1 tolerance to recover this signal.
-- **Wanted change:** none on v8.8. If live v8.7 keeps alerting 1-minute offsets, treat those as v8.7-only and not OOS-valid.
+- **Wanted change:** note only. v8.7-only (S3). Do not loosen v8.8 from this entry.

@@ -47,8 +47,9 @@ Without `SLACK_WEBHOOK_URL`, alerts still print in the terminal and append to `l
 
 Chart-vs-Slack misses, late relays, and protocol ideas from live prints
 go in [`LIVE_SCANNER_NOTES.md`](LIVE_SCANNER_NOTES.md) — newest first,
-one block per observation. That log is not a changelog and is not
-permission to edit tagged OOS v8.8.
+one block per observation. That log is observation only. It does not
+change v8.7, tagged OOS v8.8, v8.10, or any other open version. Version
+edits, pushes, or new scanners require an explicit ask and verification.
 
 ## 3. Run in Cursor / VS Code
 
