@@ -73,7 +73,7 @@ verification.
 | Q1 | ES-confirm exclusive drops NQ-confirm on the same sw2 | v8.10 dual-confirm (already live) | watching |
 | Q2 | Stale ES-confirm (e.g. 09:08) occupies the exclusive slot and hides a later NQ-confirm (09:18 / 09:36) | v8.8 exclusive only; v8.10 already scores both | watching |
 | Q3 | SMT_IN_FVG clock is sw2+1 close-in-pre-FVG, not “when I see the FVG after SMT” | new protocol if we want fire-at-FVG | open |
-| Q4 | Live poll can stall (~40 min 2026-10-06: v8.10 poll 729 last=13:05Z → poll 730 last=13:45Z). Slack time ≠ FVG bar | ops | open |
+| Q4 | Live poll stalls. 2026-10-06: ~40 min (09:05–09:45 ET) and ~9h (10:44 ET → 19:52 ET). Slack time ≠ identification clock | ops | open |
 | Q5 | Primary sw1 is the **oldest** failed parallel; later chart sw1s land in `alt_sw1_times` | format (Slack now prints alts) | watching |
 | Q6 | No live sw1–sw2 age gate. `sw1_is_fresh` is dead; v8.2 60-min limit is not applied. 07:37/09:18 = 101 min | protocol | open |
 | Q7 | v8.7 still allows sw1 parallel ±2 min (`SW1_PARALLEL_TOL_MINS = 2`). v8.8/v8.10 are exact (S3) | protocol on v8.7 only | watching |
@@ -81,6 +81,18 @@ verification.
 ---
 
 ## Log (newest first)
+
+## 2026-10-06 13:42 / 13:46 — SMT_IN_FVG Slack at 7:54 PM ET
+
+- **Versions:** v8.8 and v8.10 (v8.7 did not emit these)
+- **Slack:** both identities relayed `2026-10-06T23:54:05Z` / `23:54:09Z` (~19:54 ET)
+- **Chart:** NY Afternoon LONG MES SMT_IN_FVG. (1) sw2 13:41, clock 13:42, sw1 12:48, pre-FVG 13:34, entry `7879.75`. (2) sw2 13:45, clock 13:46, sw1 12:38 (alt 12:55 on v8.10), pre-FVG 13:34, entry `7880.50`. Identities `17:41|LONG|ES` and `17:45|LONG|ES`.
+- **Kind:** delay / ops (Q4)
+- **Disposition:** identification clock = expected (sw2+1); Slack = stall, not scanner wait
+- **What I saw:** Signals identified at 13:42 and 13:46 ET. Slack 7:54 PM.
+- **What the scanner did:** v8.8/v8.10 SMT_IN_FVG market at sw2+1 close inside the 13:34 pre-FVG. No post-SMT FVG (`fvg_bar` null). v8.7 requires a post-SMT FVG for any entry, so it did not fire. Earliest live Slack would be the poll after each confirmation close (~13:43 and ~13:47).
+- **Why (if known):** Same runner stall as the morning, longer. v8.10 poll **789** `last=2026-10-06T14:44:00Z` (10:44 ET) `new=0`. Poll **790** jumped to `last=2026-10-06T23:52:00Z` (19:52 ET) `new=2`. v8.8 poll **880** → **881** the same 14:44Z → 23:52Z gap, also `new=2`. Afternoon session 13:00–15:00 ET sat inside that ~9h 8min hole. Both alerts dumped together when the next snapshot/full-window `run()` finished (~19:54 ET).
+- **Wanted change:** note only (Q4). Do not change v8.7, v8.8, v8.10, or the runner from this entry.
 
 ## 2026-10-06 morning review — v8.7 sw1 offset, v8.10 stale sw1, FVG clock, Slack lag
 
