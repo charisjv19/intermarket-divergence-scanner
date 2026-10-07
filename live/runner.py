@@ -1,5 +1,13 @@
 """Poll ProjectX and emit new v8.7, tagged OOS v8.8, or v8.10 signals.
 
+Each live process always scores its version on every new closed 1-minute
+bar. Slack/webhook fires only when that version has a new identity — never
+a "no alert" post.
+
+Loop: bar close → wait 1s → incremental pull of that close → score → Slack
+if new. A poll that overruns the next minute catch-up re-polls immediately
+(stdout only; Slack still new-identity-only).
+
 Scanner detection logic stays frozen per version. v8.8 is the tagged OOS
 file, not origin/main. v8.10 is a new protocol on that OOS baseline:
 ES-confirm and NQ-confirm are scored independently.
@@ -34,6 +42,11 @@ import projectx_historical_pull as px
 
 UTC = timezone.utc
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Close loop: wait this long after the 1-minute close, then pull that bar.
+DEFAULT_EXTRA_CLOSE_SEC = 1.0
+# retrieveBars socket timeout for live polls (historical pull keeps 30s).
+LIVE_FETCH_TIMEOUT_SEC = 20.0
 
 # SHA256 of git show v8.8:smt_scanner_v8_8.py (OOS baseline, not origin/main).
 V88_OOS_SHA256 = "6d3580fbfc7b896db511b6781d5f572b83e941122feb99adf3ad54775efb7e8e"
@@ -159,11 +172,62 @@ def new_rows(signals: pd.DataFrame, seen: set[str]) -> pd.DataFrame:
     return signals.loc[mask].copy()
 
 
-def seconds_until_next_close(now: Optional[datetime] = None, extra_sec: float = 5.0) -> float:
+def live_client(**kwargs) -> px.ProjectXClient:
+    kwargs.setdefault("request_timeout", LIVE_FETCH_TIMEOUT_SEC)
+    return px.ProjectXClient(**kwargs)
+
+
+def seconds_until_next_close(
+    now: Optional[datetime] = None, extra_sec: float = DEFAULT_EXTRA_CLOSE_SEC
+) -> float:
     current = now or datetime.now(tz=UTC)
-    nxt = (current.replace(second=0, microsecond=0) + timedelta(minutes=1))
+    nxt = current.replace(second=0, microsecond=0) + timedelta(minutes=1)
     wait = (nxt - current).total_seconds() + extra_sec
     return max(1.0, wait)
+
+
+def last_closed_minute(now: Optional[datetime] = None) -> datetime:
+    """Timestamp of the 1-minute bar that has already closed (UTC, second=0)."""
+    current = now or datetime.now(tz=UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    else:
+        current = current.astimezone(UTC)
+    floored = current.replace(second=0, microsecond=0)
+    return floored - timedelta(minutes=1)
+
+
+def poll_is_behind(last_bar_utc: Optional[str], now: Optional[datetime] = None) -> bool:
+    """True when the snapshot's last bar is older than the latest closed minute."""
+    if not last_bar_utc:
+        return True
+    last = pd.Timestamp(last_bar_utc)
+    if last.tzinfo is None:
+        last = last.tz_localize(UTC)
+    else:
+        last = last.tz_convert(UTC)
+    expected = pd.Timestamp(last_closed_minute(now))
+    return last < expected
+
+
+def sleep_seconds_after_poll(
+    *,
+    last_bar_utc: Optional[str],
+    previous_last_bar_utc: Optional[str],
+    skipped: bool,
+    extra_sec: float = DEFAULT_EXTRA_CLOSE_SEC,
+    now: Optional[datetime] = None,
+) -> Optional[float]:
+    """Seconds to wait before the next poll.
+
+    None means catch-up immediately: this poll advanced last_bar but is still
+    behind the latest closed minute. Unchanged last_bar waits until the next
+    close so a missing API bar cannot spin.
+    """
+    advanced = last_bar_utc is not None and last_bar_utc != previous_last_bar_utc
+    if not skipped and advanced and poll_is_behind(last_bar_utc, now):
+        return None
+    return seconds_until_next_close(now, extra_sec=extra_sec)
 
 
 def default_paths(version: str, *, root: Optional[Path] = None) -> dict[str, Path]:
@@ -193,11 +257,15 @@ def process_once(
     echo: bool = True,
     artifacts_jsonl: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """One poll: snapshot → scan → seed or relay new identities."""
+    """One poll: snapshot → scan → seed or relay new identities.
+
+    Webhook/Slack is invoked only for `outgoing` rows (new identities). A
+    version that has nothing new this bar is scored but does not post.
+    """
     version = normalize_version(version)
     paths = paths or default_paths(version)
     scanner = scanner or load_scanner(version)
-    client = client or px.ProjectXClient()
+    client = client or live_client()
     meta = snapshot(
         client,
         bars_dir=paths["bars_dir"],
@@ -268,7 +336,7 @@ def loop(
     once: bool = False,
     seed_seen: bool = True,
     lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
-    extra_close_sec: float = 5.0,
+    extra_close_sec: float = DEFAULT_EXTRA_CLOSE_SEC,
     webhook_urls: Optional[list[str]] = None,
     es_contract: Optional[str] = None,
     nq_contract: Optional[str] = None,
@@ -278,18 +346,26 @@ def loop(
     scanner=None,
     paths: Optional[dict[str, Path]] = None,
     max_polls: Optional[int] = None,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(tz=UTC),
 ) -> None:
     version = normalize_version(version)
     webhook_urls = webhook_urls if webhook_urls is not None else webhook_urls_from_env()
-    client = client or px.ProjectXClient()
+    client = client or live_client()
     scanner = scanner or load_scanner(version)
     paths = paths or default_paths(version)
     contracts = resolve_contracts_once(
         client, es_contract=es_contract, nq_contract=nq_contract
     )
+    sw1_note = ""
+    if version == "v8.10":
+        sw1_note = (
+            f"  sw1_staleness={getattr(scanner, 'SW1_STALENESS_MINS', '?')}min"
+        )
     print(
         f"{version} live scanner  MES={contracts['ES']}  MNQ={contracts['NQ']}  "
-        f"lookback={lookback_hours:g}h  webhooks={len(webhook_urls)}",
+        f"lookback={lookback_hours:g}h  extra_close={extra_close_sec:g}s  "
+        f"fetch_timeout={getattr(client, 'request_timeout', LIVE_FETCH_TIMEOUT_SEC)}s  "
+        f"webhooks={len(webhook_urls)}{sw1_note}",
         flush=True,
     )
     last_bar = None
@@ -314,6 +390,7 @@ def loop(
                 raise
             sleep_fn(30.0)
             continue
+        previous_last = last_bar
         last_bar = summary.get("last_bar_utc")
         polls += 1
         print(
@@ -324,7 +401,20 @@ def loop(
         )
         if once or (max_polls is not None and polls >= max_polls):
             return
-        sleep_fn(seconds_until_next_close(extra_sec=extra_close_sec))
+        wait = sleep_seconds_after_poll(
+            last_bar_utc=last_bar,
+            previous_last_bar_utc=previous_last,
+            skipped=bool(summary.get("skipped")),
+            extra_sec=extra_close_sec,
+            now=now_fn(),
+        )
+        if wait is None:
+            print(
+                f"{version} catch-up re-poll (last={last_bar} behind closed minute)",
+                flush=True,
+            )
+            continue
+        sleep_fn(wait)
 
 
 def resolve_contracts_once(
@@ -354,6 +444,12 @@ def build_parser(version: Optional[str] = None) -> argparse.ArgumentParser:
         help="Do not seed; relay every identity not already in the seen file",
     )
     parser.add_argument("--lookback-hours", type=float, default=DEFAULT_LOOKBACK_HOURS)
+    parser.add_argument(
+        "--extra-close-sec",
+        type=float,
+        default=DEFAULT_EXTRA_CLOSE_SEC,
+        help="Seconds to wait after the 1-minute close before pulling (default 1)",
+    )
     parser.add_argument("--es-contract", default=None)
     parser.add_argument("--nq-contract", default=None)
     parser.add_argument("--webhook-url", action="append", default=None)
@@ -389,6 +485,7 @@ def main(argv: Optional[list[str]] = None, *, version: Optional[str] = None) -> 
         once=args.once,
         seed_seen=not args.alert_existing,
         lookback_hours=args.lookback_hours,
+        extra_close_sec=args.extra_close_sec,
         webhook_urls=webhook_urls,
         es_contract=args.es_contract,
         nq_contract=args.nq_contract,

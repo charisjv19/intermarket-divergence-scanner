@@ -2,6 +2,9 @@
 
 Uses retrieveBars with live=False and includePartialBar=False — the same
 closed-bar contract as the historical pull. Does not change scanner logic.
+
+After the first poll, each snapshot reuses the on-disk 36h OHLC cache and
+fetches only new closed bars plus a short overlap, then recomputes swings.
 """
 
 from __future__ import annotations
@@ -19,6 +22,9 @@ UTC = timezone.utc
 
 # 15m bias looks back MACRO_LOOKBACK_BARS_15M = 144 bars ≈ 36 hours.
 DEFAULT_LOOKBACK_HOURS = 36.0
+# Re-fetch a few already-cached minutes so a late tick revision can merge.
+INCREMENTAL_OVERLAP_MINS = 5.0
+OHLC_COLS = ["time", "open", "high", "low", "close"]
 SYMBOLS = {"ES": "MES", "NQ": "MNQ"}
 
 
@@ -62,19 +68,109 @@ def resolve_front_month(
     return out
 
 
+def _utc_ts(value: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize(UTC)
+    return ts.tz_convert(UTC)
+
+
+def load_cached_ohlc(path: Optional[Path]) -> pd.DataFrame:
+    """Read scanner-format CSV OHLC if present. Swing columns are ignored."""
+    if path is None:
+        return pd.DataFrame(columns=OHLC_COLS)
+    path = Path(path)
+    if not path.is_file():
+        return pd.DataFrame(columns=OHLC_COLS)
+    df = pd.read_csv(path)
+    if df.empty or "time" not in df.columns:
+        return pd.DataFrame(columns=OHLC_COLS)
+    out = pd.DataFrame(
+        {
+            "time": pd.to_datetime(df["time"], utc=True),
+            "open": pd.to_numeric(df["open"], errors="coerce"),
+            "high": pd.to_numeric(df["high"], errors="coerce"),
+            "low": pd.to_numeric(df["low"], errors="coerce"),
+            "close": pd.to_numeric(df["close"], errors="coerce"),
+        }
+    )
+    out = out.dropna(subset=OHLC_COLS)
+    return out.drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
+
+
+def merge_ohlc(cached: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
+    """Concat OHLC; overlapping timestamps keep the freshly fetched row."""
+    frames = []
+    for frame in (cached, fresh):
+        if frame is None or frame.empty:
+            continue
+        frames.append(frame[OHLC_COLS].copy())
+    if not frames:
+        return pd.DataFrame(columns=OHLC_COLS)
+    both = pd.concat(frames, ignore_index=True)
+    both["time"] = pd.to_datetime(both["time"], utc=True)
+    for col in ("open", "high", "low", "close"):
+        both[col] = pd.to_numeric(both[col], errors="coerce")
+    both = both.dropna(subset=OHLC_COLS)
+    return (
+        both.drop_duplicates(subset=["time"], keep="last")
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+
+
+def trim_lookback(
+    df: pd.DataFrame,
+    end: datetime,
+    lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
+) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=OHLC_COLS)
+    cutoff = px.to_utc(end) - timedelta(hours=lookback_hours)
+    times = pd.to_datetime(df["time"], utc=True)
+    return df.loc[times >= cutoff].reset_index(drop=True)
+
+
+def incremental_fetch_start(
+    cached: pd.DataFrame,
+    *,
+    end: datetime,
+    lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
+    overlap_mins: float = INCREMENTAL_OVERLAP_MINS,
+) -> datetime:
+    """Start of retrieveBars window: full lookback, or last cached bar minus overlap."""
+    lookback_start = px.to_utc(end) - timedelta(hours=lookback_hours)
+    if cached is None or cached.empty:
+        return lookback_start
+    last = _utc_ts(cached["time"].iloc[-1]).to_pydatetime()
+    return max(lookback_start, last - timedelta(minutes=overlap_mins))
+
+
 def pull_closed_1m(
     client: px.ProjectXClient,
     contract_id: str,
     *,
     lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
     now: Optional[datetime] = None,
+    cache_path: Optional[Path] = None,
+    overlap_mins: float = INCREMENTAL_OVERLAP_MINS,
 ) -> pd.DataFrame:
-    """Single retrieveBars window of closed 1-minute bars, then 4-bar swing tags."""
+    """Closed 1-minute bars for one contract, then 4-bar swing tags.
+
+    Cold start pulls the full lookback. Later polls merge a short incremental
+    retrieveBars window onto the cached OHLC, trim to lookback, and retag swings.
+    """
     end = px.to_utc(now or datetime.now(tz=UTC))
-    start = end - timedelta(hours=lookback_hours)
+    cached = load_cached_ohlc(cache_path)
+    start = incremental_fetch_start(
+        cached, end=end, lookback_hours=lookback_hours, overlap_mins=overlap_mins
+    )
     bars = client.fetch_bars(contract_id, start, end)
-    df = px.bars_to_dataframe(bars)
-    return px.compute_swings(df)
+    fresh = px.bars_to_dataframe(bars)
+    merged = trim_lookback(
+        merge_ohlc(cached, fresh), end, lookback_hours=lookback_hours
+    )
+    return px.compute_swings(merged)
 
 
 def write_scanner_csv(df: pd.DataFrame, path: Path) -> Path:
@@ -98,15 +194,25 @@ def snapshot(
     contracts = contracts or resolve_front_month(
         client, es_contract=es_contract, nq_contract=nq_contract
     )
+    bars_dir = Path(bars_dir)
+    es_path = bars_dir / "MES.csv"
+    nq_path = bars_dir / "MNQ.csv"
     es = pull_closed_1m(
-        client, contracts["ES"], lookback_hours=lookback_hours, now=now
+        client,
+        contracts["ES"],
+        lookback_hours=lookback_hours,
+        now=now,
+        cache_path=es_path,
     )
     nq = pull_closed_1m(
-        client, contracts["NQ"], lookback_hours=lookback_hours, now=now
+        client,
+        contracts["NQ"],
+        lookback_hours=lookback_hours,
+        now=now,
+        cache_path=nq_path,
     )
-    bars_dir = Path(bars_dir)
-    es_path = write_scanner_csv(es, bars_dir / "MES.csv")
-    nq_path = write_scanner_csv(nq, bars_dir / "MNQ.csv")
+    es_path = write_scanner_csv(es, es_path)
+    nq_path = write_scanner_csv(nq, nq_path)
     last = None
     if not es.empty:
         last = pd.Timestamp(es["time"].iloc[-1])

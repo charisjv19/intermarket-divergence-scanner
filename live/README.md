@@ -1,8 +1,16 @@
 # Live scanners (local + Slack)
 
-Separate processes. They poll TopstepX closed 1-minute MES/MNQ bars,
-run frozen `smt_scanner_v8_7.py` / tagged OOS `smt_scanner_v8_8.py` /
-v8.10 `smt_scanner_v8_10.py`, and relay only newly appeared identities.
+Separate processes — all three always score each closed 1-minute bar.
+They poll TopstepX MES/MNQ, run frozen `smt_scanner_v8_7.py` / tagged
+OOS `smt_scanner_v8_8.py` / v8.10 `smt_scanner_v8_10.py`, and **Slack
+only when that version has a new identity**. A process with nothing new
+does not post “no alert.”
+
+Loop: bar close → wait 1s → incremental pull of that close → score →
+Slack if new. If a poll overruns the next minute, that process catch-up
+re-polls immediately (stdout only; Slack stays new-identity-only). Live
+retrieveBars uses a 20s timeout. After the first poll the 36h window is
+cached on disk and only new bars (plus a 5-minute overlap) are fetched.
 
 v8.8 here is the tagged OOS file, not `origin/main`. v8.10 is a new
 protocol on that OOS baseline: NQ-confirm SMT can fire even when
@@ -57,7 +65,7 @@ Run and Debug (`Ctrl+Shift+D` / `Cmd+Shift+D`):
 - **Both live scanners** — starts v8.7 and v8.8 (leave both terminals running)
 - **v8.7 + v8.8 OOS + v8.10** — all three
 
-First poll seeds identities already in the 36h window (no dump of old names). After that, only new identities go to Slack.
+First poll seeds identities already in the 36h window (no dump of old names). After that, only new identities go to Slack. Terminal poll lines (`new=0 scanned`) are local logs, not Slack messages.
 
 From a terminal instead:
 

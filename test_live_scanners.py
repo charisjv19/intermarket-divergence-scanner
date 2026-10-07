@@ -7,13 +7,19 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
 
-from live.feed import pick_active_contract, snapshot
+from live.feed import (
+    INCREMENTAL_OVERLAP_MINS,
+    incremental_fetch_start,
+    merge_ohlc,
+    pick_active_contract,
+    snapshot,
+)
 from live.relay import (
     format_text,
     identity_str,
@@ -22,15 +28,19 @@ from live.relay import (
     send_test_webhook,
 )
 from live.runner import (
+    DEFAULT_EXTRA_CLOSE_SEC,
+    LIVE_FETCH_TIMEOUT_SEC,
     V88_OOS_SHA256,
     attach_levels,
     load_local_env,
     load_scanner,
+    loop,
     merge_webhook_urls,
     new_rows,
     normalize_version,
     process_once,
     seconds_until_next_close,
+    sleep_seconds_after_poll,
 )
 
 
@@ -79,8 +89,12 @@ def _signal_row(**kwargs) -> pd.Series:
 
 
 class StubClient:
-    def __init__(self, n_bars: int = 8):
-        times = pd.date_range("2026-09-29 17:00", periods=n_bars, freq="min", tz="UTC")
+    def __init__(self, n_bars: int = 8, start: str | None = None):
+        if start is None:
+            end = pd.Timestamp.now(tz="UTC").floor("min") - pd.Timedelta(minutes=1)
+            times = pd.date_range(end=end, periods=n_bars, freq="min", tz="UTC")
+        else:
+            times = pd.date_range(start, periods=n_bars, freq="min", tz="UTC")
         self._bars = [
             {
                 "t": ts.isoformat(),
@@ -398,6 +412,52 @@ class TestRunner(unittest.TestCase):
             self.assertEqual(payload["version"], "v8.8")
             self.assertEqual(payload["instrument"], "NQ")
 
+    def test_process_once_does_not_slack_when_no_new_signal(self):
+        scanner = FakeScanner(pd.DataFrame([_signal_row()]))
+        client = StubClient()
+        posted = []
+
+        def fake_post(url, json=None, timeout=None):
+            posted.append(json)
+
+            class Resp:
+                status_code = 200
+                text = "ok"
+
+            return Resp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "bars_dir": root / "bars",
+                "state_path": root / "seen.json",
+                "jsonl_path": root / "alerts.jsonl",
+            }
+            with patch("live.relay.requests.post", fake_post):
+                process_once(
+                    "v8.7",
+                    client=client,
+                    scanner=scanner,
+                    paths=paths,
+                    seed_seen=True,
+                    webhook_urls=["https://hooks.example/x"],
+                    echo=False,
+                )
+                again = process_once(
+                    "v8.7",
+                    client=client,
+                    scanner=scanner,
+                    paths=paths,
+                    seed_seen=True,
+                    webhook_urls=["https://hooks.example/x"],
+                    echo=False,
+                    last_bar_utc=None,
+                )
+            self.assertEqual(again["n_new"], 0)
+            self.assertEqual(again["n_signals"], 1)
+            self.assertEqual(posted, [])
+            self.assertFalse(paths["jsonl_path"].exists())
+
     def test_process_once_skips_unchanged_last_bar(self):
         scanner = FakeScanner(pd.DataFrame([_signal_row()]))
         client = StubClient()
@@ -446,6 +506,154 @@ class TestRunner(unittest.TestCase):
         now = datetime(2026, 9, 29, 14, 30, 40, tzinfo=UTC)
         wait = seconds_until_next_close(now, extra_sec=5)
         self.assertAlmostEqual(wait, 25.0, places=3)
+        self.assertEqual(DEFAULT_EXTRA_CLOSE_SEC, 1.0)
+        self.assertAlmostEqual(
+            seconds_until_next_close(now, extra_sec=DEFAULT_EXTRA_CLOSE_SEC),
+            21.0,
+            places=3,
+        )
+        self.assertEqual(LIVE_FETCH_TIMEOUT_SEC, 20.0)
+
+    def test_catchup_re_poll_when_advanced_but_behind(self):
+        now = datetime(2026, 9, 29, 14, 32, 10, tzinfo=UTC)
+        wait = sleep_seconds_after_poll(
+            last_bar_utc="2026-09-29T14:30:00+00:00",
+            previous_last_bar_utc="2026-09-29T14:29:00+00:00",
+            skipped=False,
+            extra_sec=1.0,
+            now=now,
+        )
+        self.assertIsNone(wait)
+
+    def test_no_catchup_spin_when_last_bar_unchanged(self):
+        now = datetime(2026, 9, 29, 14, 32, 10, tzinfo=UTC)
+        wait = sleep_seconds_after_poll(
+            last_bar_utc="2026-09-29T14:30:00+00:00",
+            previous_last_bar_utc="2026-09-29T14:30:00+00:00",
+            skipped=True,
+            extra_sec=1.0,
+            now=now,
+        )
+        self.assertAlmostEqual(wait, 51.0, places=3)
+
+    def test_caught_up_waits_one_second_after_next_close(self):
+        now = datetime(2026, 9, 29, 14, 31, 5, tzinfo=UTC)
+        wait = sleep_seconds_after_poll(
+            last_bar_utc="2026-09-29T14:30:00+00:00",
+            previous_last_bar_utc="2026-09-29T14:29:00+00:00",
+            skipped=False,
+            extra_sec=1.0,
+            now=now,
+        )
+        self.assertAlmostEqual(wait, 56.0, places=3)
+
+    def test_loop_catchup_does_not_sleep(self):
+        sleeps = []
+        summaries = iter(
+            [
+                {
+                    "last_bar_utc": "2026-09-29T14:30:00+00:00",
+                    "skipped": False,
+                    "es_bars": 10,
+                    "nq_bars": 10,
+                    "n_signals": 0,
+                    "n_new": 0,
+                    "reason": "scanned",
+                },
+                {
+                    "last_bar_utc": "2026-09-29T14:31:00+00:00",
+                    "skipped": False,
+                    "es_bars": 11,
+                    "nq_bars": 11,
+                    "n_signals": 1,
+                    "n_new": 1,
+                    "reason": "scanned",
+                },
+            ]
+        )
+        now = datetime(2026, 9, 29, 14, 32, 10, tzinfo=UTC)
+        with patch("live.runner.process_once", lambda *a, **k: next(summaries)):
+            with patch(
+                "live.runner.resolve_contracts_once",
+                lambda *a, **k: {"ES": "MES", "NQ": "MNQ"},
+            ):
+                loop(
+                    "v8.8",
+                    client=StubClient(),
+                    scanner=FakeScanner(pd.DataFrame()),
+                    max_polls=2,
+                    sleep_fn=sleeps.append,
+                    now_fn=lambda: now,
+                    webhook_urls=[],
+                )
+        self.assertEqual(sleeps, [])
+
+    def test_merge_ohlc_overlap_keeps_fresh(self):
+        cached = pd.DataFrame(
+            {
+                "time": pd.to_datetime(
+                    ["2026-09-29T17:00:00Z", "2026-09-29T17:01:00Z"], utc=True
+                ),
+                "open": [1.0, 2.0],
+                "high": [1.5, 2.5],
+                "low": [0.9, 1.9],
+                "close": [1.1, 2.1],
+            }
+        )
+        fresh = pd.DataFrame(
+            {
+                "time": pd.to_datetime(
+                    ["2026-09-29T17:01:00Z", "2026-09-29T17:02:00Z"], utc=True
+                ),
+                "open": [2.2, 3.0],
+                "high": [2.6, 3.5],
+                "low": [2.0, 2.9],
+                "close": [2.3, 3.1],
+            }
+        )
+        merged = merge_ohlc(cached, fresh)
+        self.assertEqual(len(merged), 3)
+        self.assertEqual(merged.iloc[1]["close"], 2.3)
+        self.assertEqual(merged.iloc[2]["close"], 3.1)
+
+    def test_incremental_fetch_start_uses_overlap_after_cache(self):
+        cached = pd.DataFrame(
+            {
+                "time": pd.to_datetime(["2026-09-29T17:07:00Z"], utc=True),
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+            }
+        )
+        end = datetime(2026, 9, 29, 17, 8, tzinfo=UTC)
+        start = incremental_fetch_start(cached, end=end, lookback_hours=1)
+        self.assertEqual(INCREMENTAL_OVERLAP_MINS, 5.0)
+        self.assertEqual(start, datetime(2026, 9, 29, 17, 2, tzinfo=UTC))
+        cold = incremental_fetch_start(pd.DataFrame(), end=end, lookback_hours=1)
+        self.assertEqual(cold, end - timedelta(hours=1))
+
+    def test_snapshot_second_poll_is_incremental(self):
+        client = StubClient(start="2026-09-29 17:00")
+        now = datetime(2026, 9, 29, 17, 8, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            bars_dir = Path(tmp) / "bars"
+            snapshot(client, bars_dir=bars_dir, lookback_hours=1, now=now)
+            self.assertEqual(len(client.fetch_calls), 2)
+            for _, start, _end in client.fetch_calls:
+                self.assertEqual(start, now - timedelta(hours=1))
+            client.fetch_calls.clear()
+            snapshot(
+                client,
+                bars_dir=bars_dir,
+                lookback_hours=1,
+                now=now + timedelta(minutes=1),
+            )
+            last_bar = datetime(2026, 9, 29, 17, 7, tzinfo=UTC)
+            expected_start = last_bar - timedelta(minutes=INCREMENTAL_OVERLAP_MINS)
+            self.assertEqual(len(client.fetch_calls), 2)
+            for _, start, _end in client.fetch_calls:
+                self.assertEqual(start, expected_start)
 
 
 if __name__ == "__main__":

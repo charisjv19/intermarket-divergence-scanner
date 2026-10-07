@@ -99,6 +99,10 @@ Option B — one at a time
 You should see a line like:
   v8.8 live scanner  MES=CON.F.US.MES.Z26  MNQ=CON.F.US.MNQ.Z26  webhooks=1
 
+Each process waits 1 second after the 1-minute bar close, pulls that
+close, then scores. Slack is only for NEW identities — a scanner with
+nothing new does not post “no alert.”
+
 The first poll SEEDS names already in the last 36 hours. Those do not
 go to Slack. After that, only NEW identities post to Slack and also
 append to:
