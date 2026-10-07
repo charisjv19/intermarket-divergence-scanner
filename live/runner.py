@@ -356,11 +356,16 @@ def loop(
     contracts = resolve_contracts_once(
         client, es_contract=es_contract, nq_contract=nq_contract
     )
+    sw1_note = ""
+    if version == "v8.10":
+        sw1_note = (
+            f"  sw1_staleness={getattr(scanner, 'SW1_STALENESS_MINS', '?')}min"
+        )
     print(
         f"{version} live scanner  MES={contracts['ES']}  MNQ={contracts['NQ']}  "
         f"lookback={lookback_hours:g}h  extra_close={extra_close_sec:g}s  "
         f"fetch_timeout={getattr(client, 'request_timeout', LIVE_FETCH_TIMEOUT_SEC)}s  "
-        f"webhooks={len(webhook_urls)}",
+        f"webhooks={len(webhook_urls)}{sw1_note}",
         flush=True,
     )
     last_bar = None
