@@ -89,8 +89,12 @@ def _signal_row(**kwargs) -> pd.Series:
 
 
 class StubClient:
-    def __init__(self, n_bars: int = 8):
-        times = pd.date_range("2026-09-29 17:00", periods=n_bars, freq="min", tz="UTC")
+    def __init__(self, n_bars: int = 8, start: str | None = None):
+        if start is None:
+            end = pd.Timestamp.now(tz="UTC").floor("min") - pd.Timedelta(minutes=1)
+            times = pd.date_range(end=end, periods=n_bars, freq="min", tz="UTC")
+        else:
+            times = pd.date_range(start, periods=n_bars, freq="min", tz="UTC")
         self._bars = [
             {
                 "t": ts.isoformat(),
@@ -630,7 +634,7 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(cold, end - timedelta(hours=1))
 
     def test_snapshot_second_poll_is_incremental(self):
-        client = StubClient()
+        client = StubClient(start="2026-09-29 17:00")
         now = datetime(2026, 9, 29, 17, 8, tzinfo=UTC)
         with tempfile.TemporaryDirectory() as tmp:
             bars_dir = Path(tmp) / "bars"
