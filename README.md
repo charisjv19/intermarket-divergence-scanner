@@ -217,7 +217,7 @@ Standalone Python script that classifies 15m structural bias per session. Reads 
 
 ### Pine Script Indicator
 
-TradingView Pine Script v6 indicator that displays 15m macro bias as colored chart backgrounds. Deep green = strong bullish, light green = bullish slowing, deep red = strong bearish, light red = bearish slowing, yellow = transitional.
+TradingView Pine Script v6 indicator that displays macro bias as colored chart backgrounds. A Bias Timeframe input switches the calculation between 5m and 15m. The chart must be that timeframe or a lower one that divides it evenly. Deep green = strong bullish, light green = bullish slowing, deep red = strong bearish, light red = bearish slowing, yellow = transitional.
 
 ---
 

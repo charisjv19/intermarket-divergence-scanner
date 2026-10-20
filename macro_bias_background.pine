@@ -2,6 +2,8 @@
 indicator("SMT Macro Bias Background", overlay=true, max_bars_back=500)
 
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
+// "5" and "15" are the TradingView timeframe strings for 5-minute and 15-minute.
+biasTf          = input.string("15", "Bias Timeframe", options=["5", "15"], tooltip="Structural bias is calculated on this timeframe. The chart must be this timeframe, or a lower timeframe that divides it evenly (1m or 5m under 15m; 1m under 5m).")
 bgOpacity       = input.int(88, "Background Opacity (0=solid, 100=invisible)", minval=0, maxval=100)
 slowThreshold   = input.float(0.80, "Slowing Threshold (default 0.80 = 80%)", minval=0.1, maxval=1.0, step=0.01)
 minLegs         = input.int(3, "Min Legs for Momentum Assessment", minval=2, maxval=6)
@@ -15,37 +17,70 @@ colorBearSlowing = color.new(#FFB3B3,      bgOpacity)   // light red
 colorTransitory  = color.new(color.yellow, bgOpacity)
 colorNone        = color.new(color.white,  100)         // fully transparent
 
-// ── PULL 15M DATA ────────────────────────────────────────────────────────────
-// All logic runs on 15m closes — confirmed bars only (barmerge.lookahead_off)
-[h15, l15] = request.security(syminfo.tickerid, "15", [high, low], lookahead=barmerge.lookahead_off)
+// ── TIMEFRAME GUARD ──────────────────────────────────────────────────────────
+// Swing tests have to land on whole bias-timeframe bars. A higher chart, or a
+// chart that does not divide the bias timeframe, cannot supply those bars.
+chartSeconds = timeframe.in_seconds()
+biasSeconds  = timeframe.in_seconds(biasTf)
+sameTf       = chartSeconds == biasSeconds
 
-// ── SWING DETECTION ON 15M ───────────────────────────────────────────────────
-// Mirrors your swing marker logic exactly:
+if not timeframe.isintraday or chartSeconds == 0
+    runtime.error("SMT Macro Bias Background runs on an intraday chart (1m, 5m, or 15m).")
+else if chartSeconds > biasSeconds
+    runtime.error("Bias Timeframe is " + biasTf + "m, but this chart is higher. Use a " + biasTf + "m chart or lower, or set Bias Timeframe to 15.")
+else if biasSeconds % chartSeconds != 0
+    runtime.error("The chart timeframe must divide the " + biasTf + "m bias timeframe evenly.")
+
+// ── SWING DETECTION ──────────────────────────────────────────────────────────
+// Same 4-bar test as swing_marker_detection.pine:
+// the swing is at bar[1] and is confirmed when bar[0] closes.
 // isSwingHigh = high[1] > high[2] and high[1] > high[3] and high[1] > high[0]
-// Confirmed on bar[0], marks bar[1]
-// We use h15/l15 arrays indexed on the current 15m bar stream
+f_swings() =>
+    isSwingHigh = high[1] > high[2] and high[1] > high[3] and high[1] > high[0]
+    isSwingLow  = low[1] < low[2] and low[1] < low[3] and low[1] < low[0]
+    sh = isSwingHigh ? high[1] : float(na)
+    sl = isSwingLow  ? low[1]  : float(na)
+    [sh, sl]
 
-isSwingHigh15 = h15[1] > h15[2] and h15[1] > h15[3] and h15[1] > h15[0]
-isSwingLow15  = l15[1] < l15[2] and l15[1] < l15[3] and l15[1] < l15[0]
+// One completed bias bar earlier. Offsets are literals so they stay const.
+// Used only inside request.security, where [1] is a bias-timeframe bar.
+f_swingsConfirmed() =>
+    isSwingHigh = high[2] > high[3] and high[2] > high[4] and high[2] > high[1]
+    isSwingLow  = low[2] < low[3] and low[2] < low[4] and low[2] < low[1]
+    sh = isSwingHigh ? high[2] : float(na)
+    sl = isSwingLow  ? low[2]  : float(na)
+    [sh, sl]
 
-// Confirmed swing price (bar[1] price, confirmed by bar[0] close)
-swingHighPrice15 = isSwingHigh15 ? h15[1] : float(na)
-swingLowPrice15  = isSwingLow15  ? l15[1] : float(na)
+// Chart matches the selected bias timeframe: read that chart's bars.
+// On a 15m chart with Bias Timeframe set to 15, this is the same 4-bar test
+// the previous script ran. The 5m setting uses that same test on 5m bars.
+[shChart, slChart] = f_swings()
+
+// Chart is lower than the bias timeframe (for example 5m chart, 15m bias).
+// lookahead_on plus the one-bar offset returns the last CLOSED bias bar, so
+// historical bars and the realtime bar see the same confirmed swing.
+[shHtf, slHtf] = request.security(syminfo.tickerid, biasTf, f_swingsConfirmed(), lookahead=barmerge.lookahead_on)
+
+swingHighPrice = sameTf ? shChart : shHtf
+swingLowPrice  = sameTf ? slChart : slHtf
 
 // ── ROLLING SWING ARRAYS ─────────────────────────────────────────────────────
-// Store the last 6 confirmed swing highs and lows for sequence analysis
+// Store the last 6 confirmed swing highs and lows for sequence analysis.
+// timeframe.change is true once per bias bar: every chart bar when the chart
+// matches, or the first chart bar of each 5m/15m period when the chart is lower.
 var float[] swingHighs = array.new_float(0)
 var float[] swingLows  = array.new_float(0)
 
-if not na(swingHighPrice15)
-    array.push(swingHighs, swingHighPrice15)
-    if array.size(swingHighs) > 6
-        array.shift(swingHighs)
+if timeframe.change(biasTf)
+    if not na(swingHighPrice)
+        array.push(swingHighs, swingHighPrice)
+        if array.size(swingHighs) > 6
+            array.shift(swingHighs)
 
-if not na(swingLowPrice15)
-    array.push(swingLows, swingLowPrice15)
-    if array.size(swingLows) > 6
-        array.shift(swingLows)
+    if not na(swingLowPrice)
+        array.push(swingLows, swingLowPrice)
+        if array.size(swingLows) > 6
+            array.shift(swingLows)
 
 // ── SEQUENCE ANALYSIS ─────────────────────────────────────────────────────────
 // Look at last 4 swing highs and lows to count HH/LH and HL/LL
@@ -118,6 +153,8 @@ biasColor =
 bgcolor(biasColor)
 
 // ── BIAS LABEL (top right of chart) ──────────────────────────────────────────
+tfTag = biasTf + "m"
+
 biasText =
   isBullish  and not isSlowing ? "STRONGLY BULLISH"  :
   isBullish  and isSlowing     ? "BULLISH — SLOWING" :
@@ -134,31 +171,27 @@ labelColor =
   isTransitory                 ? color.yellow :
   color.gray
 
-// Only draw label on the most recent bar to avoid clutter
+// Only draw label on the most recent bar to avoid clutter.
+labelText = tfTag + " | " + biasText
 if barstate.islast
-    label.new(
-      bar_index, high * 1.001,
-      biasText,
-      style    = label.style_label_down,
-      color    = labelColor,
-      textcolor = color.white,
-      size     = size.normal
-     )
+    label.new(bar_index, high * 1.001, labelText, style = label.style_label_down, color = labelColor, textcolor = color.white, size = size.normal)
 
 // ── DEBUG TABLE (optional — shows swing counts) ───────────────────────────────
 showDebug = input.bool(false, "Show Debug Table")
 
 if showDebug and barstate.islast
-    var table t = table.new(position.top_left, 2, 6, bgcolor=color.new(color.black, 70), border_width=1)
-    table.cell(t, 0, 0, "Metric",    text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 0, "Value",     text_color=color.white, text_size=size.small)
-    table.cell(t, 0, 1, "HH count",  text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 1, str.tostring(hhCount), text_color=color.lime,  text_size=size.small)
-    table.cell(t, 0, 2, "LH count",  text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 2, str.tostring(lhCount), text_color=color.red,   text_size=size.small)
-    table.cell(t, 0, 3, "HL count",  text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 3, str.tostring(hlCount), text_color=color.lime,  text_size=size.small)
-    table.cell(t, 0, 4, "LL count",  text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 4, str.tostring(llCount), text_color=color.red,   text_size=size.small)
-    table.cell(t, 0, 5, "Slowing",   text_color=color.white, text_size=size.small)
-    table.cell(t, 1, 5, str.tostring(isSlowing), text_color=color.yellow, text_size=size.small)
+    var table t = table.new(position.top_left, 2, 7, bgcolor=color.new(color.black, 70), border_width=1)
+    table.cell(t, 0, 0, "Metric",     text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, "Value",      text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, "Timeframe",  text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 1, tfTag,        text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 2, "HH count",   text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(hhCount), text_color=color.lime,  text_size=size.small)
+    table.cell(t, 0, 3, "LH count",   text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(lhCount), text_color=color.red,   text_size=size.small)
+    table.cell(t, 0, 4, "HL count",   text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(hlCount), text_color=color.lime,  text_size=size.small)
+    table.cell(t, 0, 5, "LL count",   text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 5, str.tostring(llCount), text_color=color.red,   text_size=size.small)
+    table.cell(t, 0, 6, "Slowing",    text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 6, str.tostring(isSlowing), text_color=color.yellow, text_size=size.small)
