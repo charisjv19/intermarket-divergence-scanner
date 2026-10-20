@@ -171,16 +171,10 @@ labelColor =
   isTransitory                 ? color.yellow :
   color.gray
 
-// Only draw label on the most recent bar to avoid clutter
+// Only draw label on the most recent bar to avoid clutter.
+labelText = tfTag + " | " + biasText
 if barstate.islast
-    label.new(
-      bar_index, high * 1.001,
-      tfTag + "  |  " + biasText,
-      style    = label.style_label_down,
-      color    = labelColor,
-      textcolor = color.white,
-      size     = size.normal
-     )
+    label.new(bar_index, high * 1.001, labelText, style = label.style_label_down, color = labelColor, textcolor = color.white, size = size.normal)
 
 // ── DEBUG TABLE (optional — shows swing counts) ───────────────────────────────
 showDebug = input.bool(false, "Show Debug Table")
