@@ -16,14 +16,30 @@ the May–June out-of-sample test.
 - **S2 (High) — done:** `SMT_IN_FVG` is a market entry at the `sw2`
   confirmation-bar close (`sw2_conf_idx + 1`), with pre-FVG membership checked
   on that same bar; SL just outside the FVG (then min-tick floor); TP = 1.5R.
+  (Later structural follow-ups — exact-1-minute confirmation, session-window
+  unification, FVG_AFTER_SMT SL-by-timestamp, confluence clock — are **not**
+  part of S2; see `scanner-structural-correctness.mdc`.)
 - **S3 (High) — done:** `SW1_PARALLEL_TOL_MINS` is 0 (exact-bar `sw1` match).
-- **S11 (Low):** 5m SMT status is emitted without the swing prices that
-  produced it, making "agree"/"conflict" unverifiable by hand.
-  Fix: add `smt5m_prices` to the output.
-- Do **NOT** fix S4–S10 in v8.8 — they are Medium/Low severity and out of scope
-  for this version per the audit's recommended sequence.
+- **S11 (Low) — incomplete (deprioritized):** `smt5m_prices` exists as a
+  formatted string on `agree` only. It does **not** contain structured
+  sw1/sw2 swing prices, and it returns `None` on `oppose`, `conflicted`,
+  and `none`. That is not the audit fix (hand-verifiable swing prices on
+  every 5m SMT status). Do not mark S11 done or merely "pending."
+  **Deprioritized** for now per current direction — not scheduled for the
+  confirmation-timing / session-window / SL / confluence-clock cleanup pass.
+- Do **NOT** fix S4–S10 in v8.8 — they are Medium/Low severity and out of
+  scope for this version per the audit's recommended sequence.
+
+## FVG_AFTER_SMT stop-loss (intended; not an original S-item)
+
+SL anchors to the most recent swing low (LONG) or swing high (SHORT) with a
+timestamp **strictly before the FVG bar's timestamp**. Re-derive that lookup
+fresh at the FVG bar — do not reuse a positional index comparison against
+the swing-history snapshot from the outer scan bar. Full invariant:
+`scanner-structural-correctness.mdc`.
 
 After S1/S2/S3/S11 are fixed: re-run v8.8 on the existing Feb–Apr data and
 review only the signals that changed relative to v8.7. Then freeze v8.8 before
 running it once, blind, on unreviewed May–June data for the real out-of-sample
-test.
+test. (S11 remaining incomplete does not block the structural-correctness
+cleanup pass.)

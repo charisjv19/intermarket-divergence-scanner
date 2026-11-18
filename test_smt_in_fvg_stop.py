@@ -1,6 +1,8 @@
 """Unit tests for v8.8 SMT_IN_FVG stop (FVG-edge ± buffer + shared min-tick floor)."""
 import unittest
 
+import pandas as pd
+
 from smt_scanner_v8_8 import (
     ES_MIN_SL_TICKS,
     ES_SMT_IN_FVG_SL_BUFFER,
@@ -66,6 +68,58 @@ class SmtInFvgStopTests(unittest.TestCase):
         )
         self.assertEqual(stop, 89.0)
         self.assertEqual(risk, 12.0)
+
+
+class FvgAfterSmtStopAnchorTests(unittest.TestCase):
+    def test_prior_swing_is_strictly_before_fvg_timestamp(self):
+        from smt_scanner_v8_8 import prior_swing_before_timestamp
+        hist = [
+            (100.0, 10, pd.Timestamp('2026-03-11 14:20:00-05:00')),
+            (101.0, 20, pd.Timestamp('2026-03-11 14:25:00-05:00')),
+            (102.0, 30, pd.Timestamp('2026-03-11 14:28:00-05:00')),
+        ]
+        fvg = pd.Timestamp('2026-03-11 14:28:00-05:00')
+        prior = prior_swing_before_timestamp(hist, fvg)
+        self.assertEqual(prior[0], 101.0)
+        self.assertEqual(prior[1], 20)
+
+    def test_empty_or_all_after_returns_none(self):
+        from smt_scanner_v8_8 import prior_swing_before_timestamp
+        fvg = pd.Timestamp('2026-03-11 14:00:00-05:00')
+        self.assertIsNone(prior_swing_before_timestamp([], fvg))
+        hist = [(100.0, 10, pd.Timestamp('2026-03-11 14:01:00-05:00'))]
+        self.assertIsNone(prior_swing_before_timestamp(hist, fvg))
+
+    def test_scanner_uses_fvg_bar_hist_not_scan_i_index(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        self.assertIn('prior_swing_before_timestamp', src)
+        self.assertIn("fvg_row = sdf.iloc[fvg['fvg_bar_idx']]", src)
+        sl_block = src[src.find("entry_type = 'FVG_AFTER_SMT'"):]
+        sl_block = sl_block[:sl_block.find('clock_row = fvg_row')]
+        self.assertNotIn('s[1] < fvg', sl_block)
+        self.assertIn('prior_swing_before_timestamp', sl_block)
+
+
+class SmtTimeAnchorTests(unittest.TestCase):
+    def test_smt_time_is_confirmation_bar_not_scan_row(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        self.assertNotIn("'smt_time':   row['et']", src)
+        self.assertIn("conf_row = sdf.iloc[conf_bar_idx]", src)
+        self.assertIn("clock_row = conf_row", src)
+        self.assertIn("'smt_time':   clock_row['et']", src)
+
+
+class ConfluenceClockTests(unittest.TestCase):
+    def test_macro_and_5m_use_clock_row_not_scan_row(self):
+        from pathlib import Path
+        src = Path('smt_scanner_v8_8.py').read_text()
+        self.assertNotIn("get_15m_macro_bias(es15, nq15, row['et'])", src)
+        self.assertNotIn("check_5m_smt_confluence(es5, nq5, row['et']", src)
+        self.assertIn("es15, nq15, clock_et", src)
+        self.assertIn("check_5m_smt_confluence(es5, nq5, clock_et, direction)", src)
+        self.assertIn("clock_et = clock_row['et']", src)
 
 
 if __name__ == '__main__':

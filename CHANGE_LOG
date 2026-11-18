@@ -6,6 +6,15 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## v8.8 (September 2026)
+
+### Fixed
+- **`smt_time` is the confirmation bar, not the scan bar** — Output `smt_time` was `row['et']` from the outer `for i, row in sdf.iterrows()` loop. Cached SMT candidates can still be in the pool many bars later, so that stamped a later, unrelated bar. `smt_time` (and `date` / `session` / closes) now come from `sdf.iloc[sw2_conf_idx + 1]`, the same confirmation bar already used for `entry_price`.
+- **Drop session-gap confirmations** — `sdf` is session + pre_session only, so `sw2_conf_idx + 1` is not always the next 1-minute bar. NY Afternoon session ends at 14:29 (`15:00` minus `SESSION_CUTOFF_MINS`); the next `sdf` row is the following day's 07:30 pre_session. A SHORT NQ on 2026-03-05 14:29 was priced at 24848 (07:30 next morning) instead of the true next 1-min close 24806.25 at 14:30. Signals whose confirmation bar is more than `MAX_CONF_GAP_MINS` (5) after `sw2_conf_time` are now excluded. `check_sw2_confirmation_gap()` is the Piece 3 regression for this invariant.
+- **`find_fvg` 3-bar windows cannot span a session gap** — `fvg_in_session()` only checked the middle bar `j`. Consecutive `sdf` indices can still be 14:29 / 07:30, so a LONG/SHORT FVG 50% entry was computed from the next session's wick. Each window now requires `j-1 → j` and `j → j+1` to be exactly 1 minute. `check_fvg_windows_contiguous()` is the Piece 3 regression.
+
+---
+
 ## v8.7 (June 2026)
 
 **Bug fixes identified through manual blind review of Feb 25 signals.**
