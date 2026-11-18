@@ -1,10 +1,10 @@
 ---
-description: Version-diff rules for backtest/compare_versions.py (identity key, material fields, inherited fill-simulator gaps, --a-signals/--b-signals). Apply when comparing scanner versions or reading review_these.csv.
-globs: backtest/compare_versions.py,test_compare_versions.py
+description: Version-diff rules for backtesting_toolkit/compare_versions.py (identity key, material fields, inherited fill-simulator gaps, --a-signals/--b-signals). Apply when comparing scanner versions or reading review_these.csv.
+globs: backtesting_toolkit/compare_versions.py,backtesting_toolkit/tests/test_compare_versions.py
 alwaysApply: true
 ---
 
-# Version diff (`backtest/compare_versions.py`)
+# Version diff (`backtesting_toolkit/compare_versions.py`)
 
 Piece 4. Wraps existing `run()` and `simulate_fills()`; it does **not**
 change scanner logic. Output is `review_these.csv` — **only** the

@@ -11,28 +11,53 @@ This is an active research project. The scanner is built iteratively — each ve
 ## Project Structure
 
 ```
-├── scanners/                      # Scanner versions (Python)
-│   ├── smt_scanner_v8_2.py        # FVG selection + staleness improvements
-│   ├── smt_scanner_v8_3.py        # 15m macro bias engine
-│   ├── smt_scanner_v8_4.py        # 5m SMT confluence layer
-│   ├── smt_scanner_v8_5.py        # Walk-back wick-break algorithm
-│   ├── smt_scanner_v8_6.py        # Multi-sw2 + parallel sw1 detection
-│   ├── smt_scanner_v8_7.py        # Dedup fix + FVG search correction
-│   ├── smt_scanner_v8_8.py        # Audit S1/S2/S3 + confirmation-clock fixes (tagged OOS, current)
-│   └── smt_scanner_v8_9.py        # Swing-wick SMT_IN_FVG membership — NOT run live, omitted going forward (see CHANGE_LOG)
-├── tools/
-│   ├── macro_bias_diagnostic.py   # 15m structural bias classifier
-│   └── macro_bias_background.pine # TradingView Pine Script v6 indicator
-├── journal/
-│   └── trading-journal-v6.html    # Custom HTML trading journal + signal review tool
-├── docs/
-│   └── SMT_Macro_Bias_Framework.pdf  # Formalized 3-timeframe bias methodology
-├── smt_scanner_v2 – v8            # Earlier scanner versions (legacy)
-├── CHANGELOG.md
+├── live_scanners/                 # LIVE — what is running right now
+│   ├── smt_scanner_v8_7.py        #   live copy of v8.7 (frozen)
+│   ├── smt_scanner_v8_8.py        #   live copy of tagged OOS v8.8
+│   ├── smt_scanner_v8_10.py       #   live copy of v8.10 (dual-confirm + 90-min sw1 staleness)
+│   ├── runner.py, feed.py, relay.py, v87.py, v88.py, v810.py   # poll TopstepX, score, post to Slack
+│   ├── START_HERE.txt             #   step-by-step VS Code setup
+│   ├── README.md
+│   ├── LIVE_SCANNER_NOTES.md      #   chart-vs-Slack observation log (observation only)
+│   └── tests/                     #   live tests, incl. live-copy == root-original check
+├── backtesting_toolkit/           # RESEARCH — backtest and review tools
+│   ├── projectx_historical_pull.py  # TopstepX 1-min history pull (6-hour paging)
+│   ├── data.py                    #   cached pulls + TradingView CSV fallback
+│   ├── simulate_fills.py          #   1-min fill simulator
+│   ├── structural_tests.py        #   checks that must pass before any backtest
+│   ├── pnl_report.py              #   Wilson CI, bootstrap expectancy, profit factor
+│   ├── compare_versions.py        #   review_these.csv of differences between versions
+│   ├── reconstruct_v87.py, v87_v88_compare.py
+│   ├── discretion_review/         #   outcome-blind hand-review pack
+│   ├── entry_variants.md          #   entry-price variant results (live-achievable Step 5)
+│   ├── README.md
+│   └── tests/
+├── smt_scanner_v8_2.py … smt_scanner_v8_10.py   # Scanner version history (originals)
+│   (smt_scanner_v8_9.py is NOT run live — its change is omitted going forward; see CHANGE_LOG)
+├── smt_scanner_v2 … smt_scanner_v8.1           # Earlier scanner versions (legacy)
+├── test_*.py                      # v8.8 / v8.9 scanner correctness tests
+├── swing_marker_detection.py / .pine            # 4-bar swing markers (Python + Pine)
+├── macro_bias_diagnostic.py, macro_bias_background.pine   # 15m bias tools
+├── SMT_Macro_Bias_Framework.pdf
+├── requirements.txt, .env.example, .vscode/, .cursor/rules/   # setup files (used by both folders)
+├── CHANGE_LOG
 └── README.md
 ```
 
-NOTE: Go to Branch 8.1 to see recent version updates to the scanner. The main branch is for whole version updates.
+**Live copies.** The scanners in `live_scanners/` are exact copies of the root
+originals with the same names, so the live folder shows what is running. To
+change a live version, change the root original and copy it into
+`live_scanners/` — `live_scanners/tests/test_live_copies.py` fails if they
+differ.
+
+**Setup files stay at the top level.** VS Code only reads `.vscode/`, Cursor
+only reads `.cursor/rules/`, and the runner loads `.env` from the repo root.
+
+Run all tests from the repo root:
+
+```bash
+python -m unittest discover -p 'test_*.py'
+```
 
 ---
 
@@ -159,7 +184,7 @@ States: `BULLISH`, `BULLISH (SLOWING)`, `BEARISH`, `BEARISH (SLOWING)`, `TRANSIT
 
 ## Version History
 
-The scanner was built iteratively. Each version reflects a specific refinement based on manual review of signal output against chart data. See [CHANGELOG.md](CHANGELOG.md) for detailed descriptions.
+The scanner was built iteratively. Each version reflects a specific refinement based on manual review of signal output against chart data. See [CHANGE_LOG](CHANGE_LOG) for detailed descriptions.
 
 | Version | Key Changes |
 |---------|-------------|
@@ -176,7 +201,10 @@ The scanner was built iteratively. Each version reflects a specific refinement b
 | **v8.4** | **5m SMT confluence layer (lenient mode: blocks only on opposing 5m SMT)** |
 | **v8.5** | **Complete SMT rewrite: walk-back wick-break algorithm with 20-swing lookback** |
 | **v8.6** | **Multi-sw2 candidates (last 5 swings); parallel sw1 timestamp matching; confirmations_count** |
-| **v8.7** | **Dedup by sw2 identity (not 30-min bucket); FVG search from sw2 confirmation bar; ES_FVG_MIN lowered to 0.5pt** |
+| **v8.7** | **Dedup by sw2 identity (not 30-min bucket); FVG search from sw2 confirmation bar; ES_FVG_MIN lowered to 0.5pt** — live |
+| **v8.8** | **Audit S1/S2/S3 + confirmation-clock and session-gap fixes; entry/stop/target columns** — tagged OOS, live |
+| v8.9 | SMT_IN_FVG membership by sw1/sw2 wick in pre-FVG — **not run live; omitted from future versions** |
+| **v8.10** | **Built on v8.8 (not v8.9): ES-confirm and NQ-confirm scored independently; 90-min sw1–sw2 staleness** — live |
 
 ---
 
@@ -236,9 +264,8 @@ TradingView Pine Script v6 indicator that displays macro bias as colored chart b
 
 ## Requirements
 
-```
-pandas
-numpy
+```bash
+pip install -r requirements.txt
 ```
 
 Input: 1-minute OHLC bar CSV files with pre-calculated `Swing High`, `Swing Low`, and `EMA` columns, exported from TradingView using the Swing High/Low Marker indicator.
@@ -248,7 +275,7 @@ Input: 1-minute OHLC bar CSV files with pre-calculated `Swing High`, `Swing Low`
 ## Usage
 
 ```python
-from scanners.smt_scanner_v8_7 import run
+from smt_scanner_v8_8 import run
 
 results, ts_filtered, macro_filtered, stale_filtered, smt5m_filtered = run(
     es_path='path/to/MES_1min.csv',
@@ -262,4 +289,6 @@ results.to_csv('signals_output.csv', index=False)
 
 ## Status
 
-Active development. Currently validating v8.7 signal output through manual blind review before out-of-sample testing on fresh data (May–June 2026).
+Active development. Live (Slack alerts, no automated execution): v8.7, tagged OOS v8.8 and v8.10 — see `live_scanners/`. v8.9 is not run live.
+
+Live-achievable backtests of v8.7 / v8.8 / v8.9 at the 50% FVG entry show negative expectancy so far; see `backtesting_toolkit/entry_variants.md`. Audit item S11 is still open.

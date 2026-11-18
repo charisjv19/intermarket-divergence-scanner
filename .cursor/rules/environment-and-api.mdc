@@ -24,7 +24,7 @@ alwaysApply: false
 
 ## retrieveBars historical retention (this account)
 
-`projectx_historical_pull.py` / the Gateway API can only be trusted for
+`backtesting_toolkit/projectx_historical_pull.py` / the Gateway API can only be trusted for
 **recent** data on the **current or very recent lead contract**. It is **not**
 a general-purpose historical backfill tool for past contracts or older date
 ranges, regardless of what the contract's official traded life was.

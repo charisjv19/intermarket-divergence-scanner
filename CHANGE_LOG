@@ -6,6 +6,17 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## Repo layout (November 2026)
+
+**Folders only — no scanner logic changed.**
+
+- `live_scanners/` (was `live/`) — runner code, `START_HERE.txt`, `README.md`, `LIVE_SCANNER_NOTES.md`, live tests, and **copies** of the scanners currently live (`smt_scanner_v8_7.py`, tagged OOS `smt_scanner_v8_8.py`, `smt_scanner_v8_10.py`). The runner loads these copies. The root originals stay where they are; `live_scanners/tests/test_live_copies.py` fails if a copy differs from its original.
+- `backtesting_toolkit/` (was `backtest/`) — fill simulator, P&L report, structural checks, version comparison, v8.7 reconstruction, discretion review, `entry_variants.md`, and `projectx_historical_pull.py` (moved from the repo root), plus their tests.
+- Setup files stay at the repo root: `requirements.txt`, `.env.example`, `.vscode/launch.json`, `.cursor/rules/`.
+- Commands: `python -m live_scanners.v87|v88|v810`, `python -m backtesting_toolkit.<tool>`. Live state now writes to `live_scanners/state/` and `live_scanners/bars/`.
+
+---
+
 ## v8.10 (October 2026)
 
 **New protocol on tagged OOS v8.8. Tagged `smt_scanner_v8_8.py` is not modified.**
@@ -15,7 +26,7 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 - **sw1 staleness 90 minutes** — confirm-side sw1 may not be older than 90 minutes from confirm-side sw2 (`SW1_STALENESS_MINS = 90`; equal to 90 is allowed). Failed parallels older than that are dropped before primary/alt selection. If none remain, that sw2 is not SMT. Explicit live-review request after 2026-10-06 07:37/09:18 (101 min). Does not change `SW2_STALENESS_MINS_1M` (sw2 vs scan bar). Tagged OOS v8.8 is unchanged.
 - SMT_IN_FVG / FVG_AFTER_SMT clocks, exact sw1/sw2 timestamp match, and FVG search from `sw2_conf_idx` are unchanged from tagged OOS v8.8.
 
-Live: `python -m live.v810` alongside frozen v8.7 and tagged OOS v8.8.
+Live: `python -m live_scanners.v810` alongside frozen v8.7 and tagged OOS v8.8.
 
 ---
 

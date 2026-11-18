@@ -1,0 +1,144 @@
+SMT LIVE SCANNERS — start here (Visual Studio Code)
+
+This folder holds the live runners and copies of the scanners that are
+currently live: v8.7, tagged OOS v8.8 and v8.10. They poll TopstepX 1-minute MES/MNQ bars and
+post NEW signals to Slack.
+
+Use Visual Studio Code (VS Code) or Cursor. The Run and Debug configs
+in .vscode/launch.json are for VS Code, not Visual Studio 2022.
+
+Windows steps are below. Mac/Linux notes at the bottom.
+
+
+STEP 1 — Install VS Code and Python
+-----------------------------------
+1. Install VS Code: https://code.visualstudio.com/
+2. Install Python 3.11 or newer: https://www.python.org/downloads/
+   During setup, check "Add python.exe to PATH".
+3. Open VS Code. Extensions (Ctrl+Shift+X) → search "Python"
+   (publisher: Microsoft) → Install.
+
+
+STEP 2 — Get the repo and open the folder
+-----------------------------------------
+1. Clone or pull the repo from GitHub (main branch):
+   https://github.com/charisjv19/intermarket-divergence-scanner
+2. In VS Code: File → Open Folder… → select the repo folder
+   (intermarket-divergence-scanner — the one that contains
+   live_scanners\, backtesting_toolkit\, .vscode\ and requirements.txt),
+   then click Select Folder. Do not open live_scanners\ by itself.
+
+
+STEP 3 — Create a virtual environment and install packages
+----------------------------------------------------------
+1. Terminal → New Terminal (Ctrl+`).
+2. Run these three commands, one at a time:
+
+   py -3 -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+
+3. If `py -3` is not found, use `python` instead of `py -3`.
+4. You should see `(.venv)` at the start of the terminal prompt.
+
+
+STEP 4 — Point VS Code at that Python
+-------------------------------------
+1. Ctrl+Shift+P → "Python: Select Interpreter"
+2. Choose the one that shows `.venv` (something like
+   .\ .venv\Scripts\python.exe).
+
+
+STEP 5 — Create your secrets file
+---------------------------------
+1. In the VS Code terminal (still in the repo folder):
+
+   copy .env.example .env
+
+2. Open the new `.env` file in VS Code. Fill in:
+
+   PROJECTX_USERNAME=your_topstepx_username
+   PROJECTX_API_KEY=your_topstepx_api_key
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+
+   No quotes around the values. Save the file.
+
+
+STEP 6 — Slack webhook (alerts to a channel)
+--------------------------------------------
+1. Browser: https://api.slack.com/apps → Create New App → From scratch.
+   Name it e.g. SMT Live. Pick your workspace.
+2. Left sidebar: Incoming Webhooks → turn On.
+3. Add New Webhook to Workspace → pick the channel (e.g. #smt-live)
+   → Allow.
+4. Copy the Webhook URL. Paste it as SLACK_WEBHOOK_URL in `.env`. Save.
+
+
+STEP 7 — Send a test message to Slack
+-------------------------------------
+1. Left sidebar: Run and Debug (play-with-bug icon), or Ctrl+Shift+D.
+2. Dropdown at the top: "Test Slack webhook (v8.8 OOS)".
+3. Green play button.
+4. Check Slack. You should see a TEST_WEBHOOK message from "SMT v8.8".
+5. Repeat with "Test Slack webhook (v8.7)" if you want both bots verified.
+
+If it errors "No Slack webhook", `.env` is missing SLACK_WEBHOOK_URL
+or VS Code is not using the `.env` in the repo folder (next to requirements.txt).
+
+
+STEP 8 — Start the live scanners
+--------------------------------
+Keep the laptop awake (sleep stops polling).
+
+Option A — both at once
+  Run and Debug dropdown → "Both live scanners" → green play.
+  Two terminals open. Leave both running.
+
+Option B — one at a time
+  Start "Live v8.7", then start "Live v8.8 OOS" the same way.
+
+Option C — all three live versions
+  Run and Debug dropdown → "v8.7 + v8.8 OOS + v8.10" → green play.
+
+You should see a line like:
+  v8.8 live scanner  MES=CON.F.US.MES.Z26  MNQ=CON.F.US.MNQ.Z26  webhooks=1
+
+Each process waits 1 second after the 1-minute bar close, pulls that
+close, then scores. Slack is only for NEW identities — a scanner with
+nothing new does not post “no alert.”
+
+The first poll SEEDS names already in the last 36 hours. Those do not
+go to Slack. After that, only NEW identities post to Slack and also
+append to:
+  live_scanners\state\v87_alerts.jsonl
+  live_scanners\state\v88_alerts.jsonl
+
+Stop with the red square in the debug toolbar, or click the terminal
+and press Ctrl+C.
+
+Live chart-vs-Slack notes (misses, late alerts, protocol ideas) are
+logged in LIVE_SCANNER_NOTES.md in this folder. Add a block at the top
+of the log when something looks wrong. Entries in that file do not
+change v8.7, v8.8, v8.10, or any other open scanner. Version changes
+must be asked for by name and verified before they count as done.
+
+
+Mac / Linux
+-----------
+Same steps, except:
+
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  cp .env.example .env
+
+
+If something fails
+------------------
+- "No module named live_scanners" — the opened folder is wrong. Open the
+  repo folder that contains the live_scanners\ directory.
+- Login / retrieveBars errors — check PROJECTX_USERNAME and
+  PROJECTX_API_KEY in `.env`.
+- No Slack post — run the Test Slack webhook config first.
+- Python not found — install Python 3.11+ and tick Add to PATH, then
+  restart VS Code.

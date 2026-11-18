@@ -1,10 +1,10 @@
 ---
-description: Fill-simulator rules for backtest/simulate_fills.py (touch logic, same-bar stop-first, FVG_AFTER_SMT limit cancels, session-end, known gaps). Apply when changing the simulator or reporting its results.
-globs: backtest/simulate_fills.py,backtest/compare_versions.py,test_simulate_fills.py
+description: Fill-simulator rules for backtesting_toolkit/simulate_fills.py (touch logic, same-bar stop-first, FVG_AFTER_SMT limit cancels, session-end, known gaps). Apply when changing the simulator or reporting its results.
+globs: backtesting_toolkit/simulate_fills.py,backtesting_toolkit/compare_versions.py,backtesting_toolkit/tests/test_simulate_fills.py
 alwaysApply: true
 ---
 
-# Fill simulator (`backtest/simulate_fills.py`)
+# Fill simulator (`backtesting_toolkit/simulate_fills.py`)
 
 Walks real 1-minute OHLC from each v8.8 signal. Outcomes are `win`,
 `loss`, `no_fill_never_traded`, `no_fill_timeout`, `no_fill_50pct`,
