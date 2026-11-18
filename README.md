@@ -17,7 +17,9 @@ This is an active research project. The scanner is built iteratively — each ve
 │   ├── smt_scanner_v8_4.py        # 5m SMT confluence layer
 │   ├── smt_scanner_v8_5.py        # Walk-back wick-break algorithm
 │   ├── smt_scanner_v8_6.py        # Multi-sw2 + parallel sw1 detection
-│   └── smt_scanner_v8_7.py        # Dedup fix + FVG search correction (current)
+│   ├── smt_scanner_v8_7.py        # Dedup fix + FVG search correction
+│   ├── smt_scanner_v8_8.py        # Audit S1/S2/S3: session sw1, exact parallel, market SMT_IN_FVG
+│   └── smt_scanner_v8_9.py        # SMT_IN_FVG membership = sw1/sw2 wick in pre-FVG (current)
 ├── tools/
 │   ├── macro_bias_diagnostic.py   # 15m structural bias classifier
 │   └── macro_bias_background.pine # TradingView Pine Script v6 indicator
@@ -47,14 +49,14 @@ A valid signal requires all of the following:
 - **Same-day enforcement** — sw1 must be from the same trading day as the signal
 - **sw2 staleness** — sw2 must be within the last 120 minutes (1m chart) or 36 bars (5m chart)
 - **15m macro bias alignment** — signal direction must agree with the combined ES+NQ structural bias on the 15-minute timeframe
-- **Fair Value Gap confluence** — a price imbalance must exist either after the divergence (FVG_AFTER_SMT) or pre-existing at the signal location (SMT_IN_FVG)
+- **Fair Value Gap confluence** — a price imbalance must exist either after the divergence (FVG_AFTER_SMT) or as a pre-existing FVG that contains the confirming instrument's sw1 and/or sw2 wick (SMT_IN_FVG, v8.9)
 
 ### Entry Types
 
 | Type | Description |
 |------|-------------|
 | `FVG_AFTER_SMT` | FVG forms after the divergence. Limit entry at the 50% level of the gap. |
-| `SMT_IN_FVG` | Divergence occurs inside a pre-existing FVG. Market entry into the gap. |
+| `SMT_IN_FVG` | Confirming-instrument sw1 and/or sw2 wick sits inside a pre-existing FVG. Market at confirmation-bar close. |
 
 ### Multi-Timeframe Integration
 

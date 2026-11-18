@@ -6,6 +6,18 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## v8.9 (September 2026)
+
+**SMT_IN_FVG membership: confirming-instrument swing wicks inside a pre-existing FVG.**
+
+### Changed
+- **Membership check** — v8.8 fired SMT_IN_FVG when the confirmation-bar **close** sat inside a pre-existing FVG. v8.9 fires when the confirming instrument's **sw1 and/or sw2 wick prices** sit inside that FVG's `[low, high]`. One or both swings is enough. Same lookback, contiguity, pre-session, imbalance, and size guards; only the inside-FVG predicate changed.
+- **Close-only setups are excluded** — a candidate whose confirmation close is inside a pre-FVG but neither swing is does **not** fall through to `FVG_AFTER_SMT`.
+
+Unchanged from v8.8: market entry at confirmation-bar close (`sw2_conf_idx + 1`), FVG-boundary SL (1.0pt ES / 3.0pt NQ buffer, 20/40-tick floor) on the pre-FVG the swing sits in, TP 1.5R, 15m/5m at the confirmation clock, no wait for displacement, `FVG_AFTER_SMT` path otherwise identical.
+
+---
+
 ## v8.8 (September 2026)
 
 ### Fixed
