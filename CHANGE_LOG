@@ -6,24 +6,50 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
-## v8.9 (September 2026)
+## v8.9 (September 2026) — NOT RUN LIVE · OMITTED FROM FUTURE VERSIONS
+
+> **Status: v8.9 is not being run live, and its change is deliberately omitted from all future scanner versions.**
+> The membership change below is the change that created v8.9, and it is the reason v8.9 is not run live.
+> That change has been chosen to be left out going forward. This is why **v8.10 does not include it**: v8.10 is
+> built from the tagged OOS v8.8 file (`v8.8` tag), not from v8.9, and keeps v8.8's confirmation-bar-close
+> SMT_IN_FVG membership test. `smt_scanner_v8_9.py` stays in the repo as a historical record only.
 
 **SMT_IN_FVG membership: confirming-instrument swing wicks inside a pre-existing FVG.**
 
-### Changed
-- **Membership check** — v8.8 fired SMT_IN_FVG when the confirmation-bar **close** sat inside a pre-existing FVG. v8.9 fires when the confirming instrument's **sw1 and/or sw2 wick prices** sit inside that FVG's `[low, high]`. One or both swings is enough. Same lookback, contiguity, pre-session, imbalance, and size guards; only the inside-FVG predicate changed.
+### Changed (the omitted change)
+- **Membership check** — v8.8 fires SMT_IN_FVG when the confirmation-bar **close** sits inside a pre-existing FVG. v8.9 instead fires when the confirming instrument's **sw1 and/or sw2 wick prices** sit inside that FVG's `[low, high]`. One or both swings is enough. Same lookback, contiguity, pre-session, imbalance, and size guards; only the inside-FVG predicate changed.
 - **Close-only setups are excluded** — a candidate whose confirmation close is inside a pre-FVG but neither swing is does **not** fall through to `FVG_AFTER_SMT`.
 
 Unchanged from v8.8: market entry at confirmation-bar close (`sw2_conf_idx + 1`), FVG-boundary SL (1.0pt ES / 3.0pt NQ buffer, 20/40-tick floor) on the pre-FVG the swing sits in, TP 1.5R, 15m/5m at the confirmation clock, no wait for displacement, `FVG_AFTER_SMT` path otherwise identical.
 
+Tests: `test_smt_in_fvg_swing_membership.py`.
+
 ---
 
-## v8.8 (September 2026)
+## v8.8 (September 2026) — tagged OOS baseline (`v8.8` tag)
 
-### Fixed
-- **`smt_time` is the confirmation bar, not the scan bar** — Output `smt_time` was `row['et']` from the outer `for i, row in sdf.iterrows()` loop. Cached SMT candidates can still be in the pool many bars later, so that stamped a later, unrelated bar. `smt_time` (and `date` / `session` / closes) now come from `sdf.iloc[sw2_conf_idx + 1]`, the same confirmation bar already used for `entry_price`.
-- **Drop session-gap confirmations** — `sdf` is session + pre_session only, so `sw2_conf_idx + 1` is not always the next 1-minute bar. NY Afternoon session ends at 14:29 (`15:00` minus `SESSION_CUTOFF_MINS`); the next `sdf` row is the following day's 07:30 pre_session. A SHORT NQ on 2026-03-05 14:29 was priced at 24848 (07:30 next morning) instead of the true next 1-min close 24806.25 at 14:30. Signals whose confirmation bar is more than `MAX_CONF_GAP_MINS` (5) after `sw2_conf_time` are now excluded. `check_sw2_confirmation_gap()` is the Piece 3 regression for this invariant.
-- **`find_fvg` 3-bar windows cannot span a session gap** — `fvg_in_session()` only checked the middle bar `j`. Consecutive `sdf` indices can still be 14:29 / 07:30, so a LONG/SHORT FVG 50% entry was computed from the next session's wick. Each window now requires `j-1 → j` and `j → j+1` to be exactly 1 minute. `check_fvg_windows_contiguous()` is the Piece 3 regression.
+**Fixes from the September 2026 strategy audit (S1, S2, S3) plus confirmation-clock and session-gap correctness fixes.** The file at the `v8.8` tag is the frozen out-of-sample version used by the live scanners and as the base for v8.10. v8.7 is left frozen. No detection thresholds were retuned. Audit item S11 is still open.
+
+### Audit fixes
+- **S1 — session-aware sw1 walk-back** — the sw1 walk-back is limited to the signal's own session (via `classify_bar`), not just the same calendar date.
+- **S3 — exact parallel sw1** — `SW1_PARALLEL_TOL_MINS` 2 → 0. The failing instrument's sw1 must be on the exact same bar as the confirming instrument's sw1.
+- **S2 — entry / stop / target protocol** (new output columns `entry_price`, `stop_loss`, `take_profit`, `target_R`):
+  - `SMT_IN_FVG`: **market** entry at the sw2 confirmation-bar close (sw2 + 1 min), no post-SMT FVG required. Membership = that bar's close is inside a pre-existing FVG. SL just outside the pre-existing FVG edge (ES 1.0 / NQ 3.0 pt buffer). TP 1.5R.
+  - `FVG_AFTER_SMT`: 50% FVG limit entry kept. SL beyond the swing preceding the FVG (ES 2.0 / NQ 8.0 pt buffer). TP 3R.
+  - Shared minimum stop: 20 ticks ES (5.0 pt) / 40 ticks NQ (10.0 pt), applied to both entry types.
+
+### Fixed — confirmation clock and session gaps
+- **`smt_time` is the confirmation bar, not the scan bar** — `smt_time` (and `date` / `session` / closes) now come from `sdf.iloc[sw2_conf_idx + 1]`, the same bar used for `entry_price`. Previously a cached SMT candidate could be stamped with a later, unrelated scan bar.
+- **Drop session-gap confirmations** — `sdf` holds session + pre_session bars only, so `sw2_conf_idx + 1` is not always the next minute. Example: a 2026-03-05 14:29 SHORT NQ was priced at the next morning's 07:30 close (24848) instead of the true 14:30 close (24806.25). Confirmations more than `MAX_CONF_GAP_MINS` (5) after sw2 are excluded.
+- **SMT_IN_FVG confirmation is exactly 1 minute** — the SMT_IN_FVG path requires the confirmation bar to be exactly sw2 + 1 minute; otherwise SMT_IN_FVG is rejected with no fallback. `FVG_AFTER_SMT` is not gated by this rule. `fvg_in_session()` now uses the same `SESSION_CUTOFF_MINS` window as `classify_bar()`.
+- **FVG 3-bar windows cannot span a session gap** — every leg of a 3-bar FVG (`find_fvg` and `find_preexisting_fvg`) must be exactly 1 minute apart, so a 14:28 / 14:29 / next-day 07:30 window can no longer form a phantom FVG.
+- **FVG_AFTER_SMT stop re-anchored at the FVG bar** — the prior swing is taken from the FVG bar's swing history (most recent swing strictly before the FVG bar), not the scan bar's.
+- **15m bias and 5m SMT read at the confirmation clock** — `combined_15m_bias` and `smt5m_status` are evaluated at sw2 + 1 min for SMT_IN_FVG and at the FVG-formation bar for FVG_AFTER_SMT, not at the outer scan bar.
+- **ES/NQ inner-join** — the 1m merge is explicitly `how='inner'`; a minute present on only one tape is dropped from both and never filled, and 5m/15m bars are resampled only from the shared minutes. (Feb–Apr tape: 13 / 1 exclusive timestamps → 0 / 0.)
+- **Pre-session FVGs count for SMT_IN_FVG membership** — a pre-existing FVG formed in 07:30–08:00 or 12:30–13:00 is valid membership structure. `find_fvg` / FVG_AFTER_SMT stay session-only.
+
+### Tests
+`test_confirmation_gap.py`, `test_fvg_session_gap.py`, `test_es_nq_align.py`, `test_smt_in_fvg_stop.py`. Regression checks `check_sw2_confirmation_gap()` and `check_fvg_windows_contiguous()`.
 
 ---
 

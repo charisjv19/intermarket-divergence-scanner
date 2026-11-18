@@ -1,3 +1,8 @@
+# STATUS: NOT RUN LIVE. The SMT_IN_FVG swing-wick membership change that created v8.9
+# has been chosen to be omitted from all future scanner versions. v8.10 is built from
+# the tagged OOS v8.8 file, not this one, so it does not include this change.
+# Kept as a historical record only. See CHANGE_LOG (v8.9).
+
 """
 SMT Setup Scanner v8.9
 Base: tagged v8.8 (3a209081). One change: SMT_IN_FVG membership.
