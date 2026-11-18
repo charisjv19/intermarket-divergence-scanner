@@ -19,6 +19,15 @@ ES-confirm already exists. Do not edit `smt_scanner_v8_8.py` for that.
 State files (gitignored) are written to `live_scanners/state/` and
 `live_scanners/bars/`.
 
+> **Opening in VS Code or Cursor:** open the repo's **top folder**
+> (`intermarket-divergence-scanner`, the one that contains `live_scanners/`,
+> `.vscode/`, `requirements.txt` and `.env.example`) — **not** `live_scanners/`
+> on its own. VS Code only finds the Run and Debug buttons in the top
+> folder's `.vscode/`, the runner loads `.env` from the top folder, and
+> `python -m live_scanners.v88` only works from there. Opening
+> `live_scanners/` by itself gives "No module named live_scanners" and no
+> launch buttons.
+
 ## 1. Files you need on your laptop
 
 Everything is on `main`. Clone or pull the repo and open the **repo root**
@@ -68,7 +77,8 @@ edits, pushes, or new scanners require an explicit ask and verification.
 
 ## 3. Run in Cursor / VS Code
 
-Install the Python extension. Select the `.venv` interpreter.
+Open the repo's top folder (see the note at the top of this file), not
+`live_scanners/`. Install the Python extension. Select the `.venv` interpreter.
 
 Run and Debug (`Ctrl+Shift+D` / `Cmd+Shift+D`):
 
