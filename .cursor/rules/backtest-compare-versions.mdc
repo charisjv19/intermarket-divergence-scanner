@@ -1,0 +1,69 @@
+---
+description: Version-diff rules for backtest/compare_versions.py (identity key, material fields, inherited fill-simulator gaps, --a-signals/--b-signals). Apply when comparing scanner versions or reading review_these.csv.
+globs: backtest/compare_versions.py,test_compare_versions.py
+alwaysApply: true
+---
+
+# Version diff (`backtest/compare_versions.py`)
+
+Piece 4. Wraps existing `run()` and `simulate_fills()`; it does **not**
+change scanner logic. Output is `review_these.csv` — **only** the
+differences, labeled by `change`. Unchanged matches are omitted.
+
+## Identity key
+
+A signal is the same SMT across versions when this tuple matches:
+
+`(date, sw2_conf_time, direction, instrument)`
+
+That is the scanner dedup key and the key used throughout this
+session's manual Fix 1 / 2 / 3 / membership diffs. Do not identity on
+`smt_time`, a 30-minute bucket, or `fvg_bar`. Timestamps must match
+exactly (same instant; timezone-normalized).
+
+- In B not A → `change=added`
+- In A not B → `change=removed`
+- In both, but a material field differs → one row per differing field
+
+## Material field change
+
+A matched identity is "materially different" only when one of these
+differs between A and B:
+
+- `entry_price`
+- `stop_loss`
+- `take_profit`
+- `entry_type`
+- `realized_R`
+
+`change` is the field name. Side-by-side `_a` / `_b` columns carry
+both values. 15m bias, `smt5m_status`, `fvg_bar`, and other
+context columns are **not** material for this report — they can
+change without a `review_these` row.
+
+## Inherits fill-simulator gaps
+
+`compare_versions.py` calls `simulate_fills()` internally, so every
+report it produces **inherits and must disclose** the fill simulator's
+three known gaps. Do not redefine those gaps here — they live in
+`backtest-fill-simulator.mdc`:
+
+- partial exits not simulated
+- concurrent-trade limits not enforced
+- 5m-opposing-SMT blocking not implemented
+
+Stdout already prints that disclosure. Any summary of a
+`review_these.csv` (chat, PR, spreadsheet) must repeat it.
+
+## `--a-signals` / `--b-signals` — preferred when CSVs exist
+
+`--a PATH` / `--b PATH` (optional `--a-ref` / `--b-ref`) re-runs
+`scanner.run()` on the ES/NQ tape. That is the path for a new
+scanner version that has no saved output yet.
+
+When a historical signals CSV already exists (a prior scan of the
+same tape, a tagged OOS dump, this session's Feb–Apr snapshots),
+**prefer `--a-signals` / `--b-signals`**. Skip the re-scan. Fill
+simulation still runs on both CSVs against `--es` / `--nq`. Re-running
+the full scanner just to diff known CSVs wastes time and can drift
+if the working tree is not the commit that produced the file.
