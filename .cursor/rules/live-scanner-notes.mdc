@@ -1,0 +1,20 @@
+# Live scanner notes
+
+When the user reports a live Slack miss, a false alert, late relay, wrong
+sw1/sw2/FVG text, or a protocol idea from a live session, append a dated
+block to `live/LIVE_SCANNER_NOTES.md` (newest first, below the open
+queue). Use the template in that file. Update the open queue if the
+note is a repeating pattern.
+
+**Stop there.** Nothing written in that log changes a version that is
+open/live now (`smt_scanner_v8_7.py`, `smt_scanner_v8_8.py`,
+`smt_scanner_v8_10.py`) or any later live scanner. Do not edit those
+files, retune thresholds, push a version, or add a new scanner because
+a note was logged.
+
+A version change, patch, push, or new protocol file happens only when
+the user **explicitly names the version and asks for the change**, and
+the change is **directly verified** before it is treated as done.
+`Wanted change` and open-queue rows are notes, not work orders.
+Threshold retunes to recover one live print must be flagged in that
+explicit request first.
