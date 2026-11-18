@@ -42,7 +42,7 @@ from backtesting_toolkit import projectx_historical_pull as px
 
 UTC = timezone.utc
 # Live copies of each scanner live next to this file (live_scanners/).
-# The originals stay in the repo root; live_scanners/tests/test_live_copies.py keeps them identical.
+# The originals are in scanner_versions/; live_scanners/tests/test_live_copies.py keeps them identical.
 LIVE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = LIVE_DIR.parent
 

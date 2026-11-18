@@ -4,13 +4,14 @@ FVG_AFTER_SMT is not on this clock. Piece 3 should call
 check_sw2_confirmation_gap() on every scanner output CSV.
 sdf is session + pre_session only, so index+1 can jump 14:29 → next 07:30.
 """
+from pathlib import Path
 import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from smt_scanner_v8_8 import (
+from scanner_versions.smt_scanner_v8_8 import (
     MAX_CONF_GAP_MINS,
     SESSION_CUTOFF_MINS,
     SMT_IN_FVG_CONFIRM_MINS,
@@ -21,6 +22,8 @@ from smt_scanner_v8_8 import (
     confirmation_gap_minutes,
     fvg_in_session,
 )
+
+_SCANNERS = Path(__file__).resolve().parents[1] / 'scanner_versions'
 
 ET = ZoneInfo('America/New_York')
 
@@ -133,7 +136,7 @@ class Piece3ConfirmationGapCheckTests(unittest.TestCase):
 
     def test_scanner_does_not_gate_fvg_after_smt_on_confirmation(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertIn('confirmation_bar_is_contiguous', src)
         self.assertIn('SMT_IN_FVG_CONFIRM_MINS', src)
         # Gate failure must not `continue` the whole candidate before find_fvg.

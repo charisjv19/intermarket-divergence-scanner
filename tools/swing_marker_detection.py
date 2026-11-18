@@ -20,7 +20,7 @@ Inverse logic for swing lows:
   - bar[1].low < bar[0].low
 
 Usage:
-  python swing_marker_detection.py <csv_path> [output_path]
+  python tools/swing_marker_detection.py <csv_path> [output_path]
 
   Input CSV must have columns: time, open, high, low, close
   Output adds Swing High and Swing Low columns (1 = swing, 0 = not)
@@ -89,7 +89,7 @@ def detect_swings_with_prices(df):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: python swing_marker_detection.py <csv_path> [output_path]")
+        print("Usage: python tools/swing_marker_detection.py <csv_path> [output_path]")
         print("  Input CSV must have columns: time, open, high, low, close")
         sys.exit(1)
 

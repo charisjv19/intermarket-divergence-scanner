@@ -32,21 +32,25 @@ This is an active research project. The scanner is built iteratively — each ve
 │   ├── entry_variants.md          #   entry-price variant results (live-achievable Step 5)
 │   ├── README.md
 │   └── tests/
-├── smt_scanner_v8_2.py … smt_scanner_v8_10.py   # Scanner version history (originals)
-│   (smt_scanner_v8_9.py is NOT run live — its change is omitted going forward; see CHANGE_LOG)
-├── smt_scanner_v2 … smt_scanner_v8.1           # Earlier scanner versions (legacy)
-├── test_*.py                      # v8.8 / v8.9 scanner correctness tests
-├── swing_marker_detection.py / .pine            # 4-bar swing markers (Python + Pine)
-├── macro_bias_diagnostic.py, macro_bias_background.pine   # 15m bias tools
+├── scanner_versions/              # Every scanner version — the originals
+│   ├── smt_scanner_v2.py … smt_scanner_v8_1.py  #   legacy versions (v2–v8.1)
+│   ├── smt_scanner_v8_2.py … smt_scanner_v8_7.py
+│   ├── smt_scanner_v8_8.py        #   tagged OOS v8.8
+│   ├── smt_scanner_v8_9.py        #   NOT run live — its change is omitted going forward (see CHANGE_LOG)
+│   └── smt_scanner_v8_10.py
+├── tests/                         # v8.8 / v8.9 scanner correctness tests
+├── tools/
+│   ├── swing_marker_detection.py / .pine        # 4-bar swing markers (Python + Pine)
+│   └── macro_bias_diagnostic.py, macro_bias_background.pine   # 15m bias tools
 ├── SMT_Macro_Bias_Framework.pdf
 ├── requirements.txt, .env.example, .vscode/, .cursor/rules/   # setup files (used by both folders)
 ├── CHANGE_LOG
 └── README.md
 ```
 
-**Live copies.** The scanners in `live_scanners/` are exact copies of the root
-originals with the same names, so the live folder shows what is running. To
-change a live version, change the root original and copy it into
+**Live copies.** The scanners in `live_scanners/` are exact copies of the
+originals in `scanner_versions/`, so the live folder shows what is running. To
+change a live version, change the original in `scanner_versions/` and copy it into
 `live_scanners/` — `live_scanners/tests/test_live_copies.py` fails if they
 differ.
 
@@ -275,7 +279,7 @@ Input: 1-minute OHLC bar CSV files with pre-calculated `Swing High`, `Swing Low`
 ## Usage
 
 ```python
-from smt_scanner_v8_8 import run
+from scanner_versions.smt_scanner_v8_8 import run
 
 results, ts_filtered, macro_filtered, stale_filtered, smt5m_filtered = run(
     es_path='path/to/MES_1min.csv',

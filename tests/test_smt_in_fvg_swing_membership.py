@@ -11,11 +11,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from smt_scanner_v8_9 import (
+from scanner_versions.smt_scanner_v8_9 import (
     find_preexisting_fvg,
     fvg_in_session,
     fvg_in_session_or_pre_session,
 )
+
+_SCANNERS = Path(__file__).resolve().parents[1] / 'scanner_versions'
 
 ET = ZoneInfo('America/New_York')
 
@@ -147,7 +149,7 @@ class SwingWickMembershipTests(unittest.TestCase):
 
 class V89RunWiringTests(unittest.TestCase):
     def test_run_passes_confirming_swing_wicks_not_close(self):
-        src = Path('smt_scanner_v8_9.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_9.py').read_text()
         body = src.split("for c in candidates:")[1]
         self.assertIn("sw1, sw2 = c['es_sw1_price'], c['es_sw2_price']", body)
         self.assertIn("sw1, sw2 = c['nq_sw1_price'], c['nq_sw2_price']", body)
@@ -155,7 +157,7 @@ class V89RunWiringTests(unittest.TestCase):
         self.assertNotIn('PRE_FVG_LOOKBACK, entry_price\n', body)
 
     def test_close_only_does_not_fall_through_to_fvg_after_smt(self):
-        src = Path('smt_scanner_v8_9.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_9.py').read_text()
         body = src.split("for c in candidates:")[1].split("if pre_fvg:")[0]
         self.assertIn('close_only_no_swings', body)
         self.assertIn('continue', body)

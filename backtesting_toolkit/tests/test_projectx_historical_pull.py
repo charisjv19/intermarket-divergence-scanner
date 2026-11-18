@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 
 from backtesting_toolkit import projectx_historical_pull as px
-import swing_marker_detection as smd
+from tools import swing_marker_detection as smd
 
 
 ET = ZoneInfo("America/New_York")

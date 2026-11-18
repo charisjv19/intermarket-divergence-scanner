@@ -36,14 +36,14 @@ python -m backtesting_toolkit.projectx_historical_pull --contract-id CON.F.US.ME
     --start 2026-10-01 --end 2026-10-05 --out MES.csv
 
 # Structural checks (must pass before a backtest)
-python -m backtesting_toolkit.structural_tests --signals signals.csv --pine-csv MES.csv --scanner smt_scanner_v8_8.py
+python -m backtesting_toolkit.structural_tests --signals signals.csv --pine-csv MES.csv --scanner scanner_versions/smt_scanner_v8_8.py
 
 # Fill simulation and P&L report
 python -m backtesting_toolkit.simulate_fills --signals signals.csv --es-bars MES.csv --nq-bars MNQ.csv --out fills.csv --spot-check 10
 python -m backtesting_toolkit.pnl_report --signals signals.csv --es-bars MES.csv --nq-bars MNQ.csv --out-dir report/
 
 # Compare two versions (prefer --a-signals/--b-signals when the CSVs already exist)
-python -m backtesting_toolkit.compare_versions --a smt_scanner_v8_8.py --b smt_scanner_v8_10.py \
+python -m backtesting_toolkit.compare_versions --a scanner_versions/smt_scanner_v8_8.py --b scanner_versions/smt_scanner_v8_10.py \
     --es MES.csv --nq MNQ.csv --out review_these.csv
 python -m backtesting_toolkit.v87_v88_compare --v87-signals v87.csv --v88-signals v88.csv \
     --es-bars MES.csv --nq-bars MNQ.csv --out-dir cmp/

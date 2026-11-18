@@ -29,7 +29,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from swing_marker_detection import detect_swings
+from tools.swing_marker_detection import detect_swings
 
 LEVEL_COLS = ("entry_price", "stop_loss", "take_profit")
 DUP_COLS = ("date", "sw2_conf_time", "direction", "instrument")

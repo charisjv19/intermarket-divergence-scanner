@@ -6,6 +6,18 @@ Versions prior to v8.5 used a "compare last 2 swings" approach. v8.5 introduced 
 
 ---
 
+## Repo layout, part 2 (November 2026)
+
+**Folders only — no scanner logic changed.**
+
+- `scanner_versions/` — every scanner version (the originals), moved out of the repo root. Legacy files without an extension now end in `.py`: `smt_scanner_v2.py` … `smt_scanner_v8.py`, and `smt_scanner_v8.1` → `smt_scanner_v8_1.py`. Import as `from scanner_versions.smt_scanner_v8_8 import run`.
+- `tests/` — the v8.8 / v8.9 scanner correctness tests (were at the repo root).
+- `tools/` — `swing_marker_detection.py` / `.pine`, `macro_bias_diagnostic.py`, `macro_bias_background.pine`.
+- `live_scanners/tests/test_live_copies.py` now compares the live copies against `scanner_versions/`.
+- Backtest commands take scanner paths under `scanner_versions/` (e.g. `--a scanner_versions/smt_scanner_v8_8.py`). `compare_versions --a-ref` on commits older than this layout needs the old root path.
+
+---
+
 ## Repo layout (November 2026)
 
 **Folders only — no scanner logic changed.**

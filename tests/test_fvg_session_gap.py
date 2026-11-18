@@ -3,17 +3,20 @@
 Piece 3 should call check_fvg_windows_contiguous(signals, sdf) whenever
 both the signal CSV and the session-filtered bars are available.
 """
+from pathlib import Path
 import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from smt_scanner_v8_8 import (
+from scanner_versions.smt_scanner_v8_8 import (
     check_fvg_windows_contiguous,
     find_fvg,
     fvg_window_is_contiguous,
 )
+
+_SCANNERS = Path(__file__).resolve().parents[1] / 'scanner_versions'
 
 ET = ZoneInfo('America/New_York')
 
@@ -106,7 +109,7 @@ class Piece3FvgWindowCheckTests(unittest.TestCase):
 
     def test_find_fvg_calls_contiguous_check(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertIn('if not fvg_window_is_contiguous(sdf, j):', src)
         body = src.split('def find_fvg(')[1].split('def fmt_ts')[0]
         self.assertIn('fvg_window_is_contiguous', body)
@@ -134,7 +137,7 @@ class Piece3PreSessionPreFvgMembershipTests(unittest.TestCase):
         })
 
     def test_pre_session_fvg_is_valid_smt_in_fvg_membership(self):
-        from smt_scanner_v8_8 import (
+        from scanner_versions.smt_scanner_v8_8 import (
             find_preexisting_fvg,
             fvg_in_session,
             fvg_in_session_or_pre_session,
@@ -153,7 +156,7 @@ class Piece3PreSessionPreFvgMembershipTests(unittest.TestCase):
         self.assertEqual(got['pre_fvg_high'], 100.6)
 
     def test_afternoon_pre_session_fvg_is_also_valid(self):
-        from smt_scanner_v8_8 import find_preexisting_fvg
+        from scanner_versions.smt_scanner_v8_8 import find_preexisting_fvg
         times = [
             _et(2026, 2, 24, 12, 47),
             _et(2026, 2, 24, 12, 48),
@@ -182,7 +185,7 @@ class Piece3PreSessionPreFvgMembershipTests(unittest.TestCase):
 
     def test_preexisting_lookup_does_not_use_session_only_cutoff(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         body = src.split('def find_preexisting_fvg(')[1].split('def find_fvg(')[0]
         self.assertNotIn('if not fvg_in_session(', body)
         self.assertIn('fvg_in_session_or_pre_session', body)

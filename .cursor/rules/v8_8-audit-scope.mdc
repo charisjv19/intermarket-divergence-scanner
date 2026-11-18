@@ -1,6 +1,6 @@
 ---
 description: Scope and required fixes for scanner v8.8 (Sep 2026 audit SMT_FVG_Strategy_Audit_Sep2026). Read before making any v8.8 change.
-globs: smt_scanner_v*.py
+globs: scanner_versions/smt_scanner_v*.py,live_scanners/smt_scanner_v*.py
 alwaysApply: false
 ---
 

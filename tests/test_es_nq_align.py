@@ -5,11 +5,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from smt_scanner_v8_8 import (
+from scanner_versions.smt_scanner_v8_8 import (
     exclusive_bar_times,
     merge_es_nq_1m,
     resample_to_15m_and_5m,
 )
+
+_SCANNERS = Path(__file__).resolve().parents[1] / 'scanner_versions'
 
 
 def _bars(times, high=None):
@@ -59,7 +61,7 @@ class InnerJoinTests(unittest.TestCase):
         self.assertFalse(merged['close_nq'].isna().any())
 
     def test_source_uses_explicit_inner_join(self):
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertIn("how='inner'", src)
         self.assertIn('es.index.intersection(nq.index)', src)
         self.assertNotIn("how='outer'", src)

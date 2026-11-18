@@ -38,8 +38,8 @@ What the live scanners use:
 
 - `live_scanners/` — runner code (poll, score, relay) and the **live copies**
   of the scanners currently running: `smt_scanner_v8_7.py`,
-  `smt_scanner_v8_8.py` (tagged OOS) and `smt_scanner_v8_10.py`. The root
-  files with the same names are the originals; `live_scanners/tests/test_live_copies.py`
+  `smt_scanner_v8_8.py` (tagged OOS) and `smt_scanner_v8_10.py`. The
+  originals with the same names are in `scanner_versions/`; `live_scanners/tests/test_live_copies.py`
   fails if a copy drifts from its original.
 - `backtesting_toolkit/` — `projectx_historical_pull.py` (TopstepX client),
   v8.7 reconstructed levels and the identity key.

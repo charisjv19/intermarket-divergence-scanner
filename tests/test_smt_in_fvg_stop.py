@@ -1,9 +1,10 @@
 """Unit tests for v8.8 SMT_IN_FVG stop (FVG-edge ± buffer + shared min-tick floor)."""
+from pathlib import Path
 import unittest
 
 import pandas as pd
 
-from smt_scanner_v8_8 import (
+from scanner_versions.smt_scanner_v8_8 import (
     ES_MIN_SL_TICKS,
     ES_SMT_IN_FVG_SL_BUFFER,
     ES_TICK_SIZE,
@@ -14,6 +15,8 @@ from smt_scanner_v8_8 import (
     compute_smt_in_fvg_stop,
     min_stop_points,
 )
+
+_SCANNERS = Path(__file__).resolve().parents[1] / 'scanner_versions'
 
 
 class MinStopFloorTests(unittest.TestCase):
@@ -72,7 +75,7 @@ class SmtInFvgStopTests(unittest.TestCase):
 
 class FvgAfterSmtStopAnchorTests(unittest.TestCase):
     def test_prior_swing_is_strictly_before_fvg_timestamp(self):
-        from smt_scanner_v8_8 import prior_swing_before_timestamp
+        from scanner_versions.smt_scanner_v8_8 import prior_swing_before_timestamp
         hist = [
             (100.0, 10, pd.Timestamp('2026-03-11 14:20:00-05:00')),
             (101.0, 20, pd.Timestamp('2026-03-11 14:25:00-05:00')),
@@ -84,7 +87,7 @@ class FvgAfterSmtStopAnchorTests(unittest.TestCase):
         self.assertEqual(prior[1], 20)
 
     def test_empty_or_all_after_returns_none(self):
-        from smt_scanner_v8_8 import prior_swing_before_timestamp
+        from scanner_versions.smt_scanner_v8_8 import prior_swing_before_timestamp
         fvg = pd.Timestamp('2026-03-11 14:00:00-05:00')
         self.assertIsNone(prior_swing_before_timestamp([], fvg))
         hist = [(100.0, 10, pd.Timestamp('2026-03-11 14:01:00-05:00'))]
@@ -92,7 +95,7 @@ class FvgAfterSmtStopAnchorTests(unittest.TestCase):
 
     def test_scanner_uses_fvg_bar_hist_not_scan_i_index(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertIn('prior_swing_before_timestamp', src)
         self.assertIn("fvg_row = sdf.iloc[fvg['fvg_bar_idx']]", src)
         sl_block = src[src.find("entry_type = 'FVG_AFTER_SMT'"):]
@@ -104,7 +107,7 @@ class FvgAfterSmtStopAnchorTests(unittest.TestCase):
 class SmtTimeAnchorTests(unittest.TestCase):
     def test_smt_time_is_confirmation_bar_not_scan_row(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertNotIn("'smt_time':   row['et']", src)
         self.assertIn("conf_row = sdf.iloc[conf_bar_idx]", src)
         self.assertIn("clock_row = conf_row", src)
@@ -114,7 +117,7 @@ class SmtTimeAnchorTests(unittest.TestCase):
 class ConfluenceClockTests(unittest.TestCase):
     def test_macro_and_5m_use_clock_row_not_scan_row(self):
         from pathlib import Path
-        src = Path('smt_scanner_v8_8.py').read_text()
+        src = (_SCANNERS / 'smt_scanner_v8_8.py').read_text()
         self.assertNotIn("get_15m_macro_bias(es15, nq15, row['et'])", src)
         self.assertNotIn("check_5m_smt_confluence(es5, nq5, row['et']", src)
         self.assertIn("es15, nq15, clock_et", src)
