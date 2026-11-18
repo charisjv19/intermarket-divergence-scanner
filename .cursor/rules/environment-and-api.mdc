@@ -21,3 +21,37 @@ alwaysApply: false
 - Swing detection (Pine Script "Swing High/Low Marker" v1.2) has been verified
   to match CSV exports exactly — treat that CSV column as ground truth if you
   ever touch swing-detection logic.
+
+## retrieveBars historical retention (this account)
+
+`projectx_historical_pull.py` / the Gateway API can only be trusted for
+**recent** data on the **current or very recent lead contract**. It is **not**
+a general-purpose historical backfill tool for past contracts or older date
+ranges, regardless of what the contract's official traded life was.
+
+Empirically confirmed on this account (2026-09-21 live probes, `live: False`):
+
+- Current lead `CON.F.US.MES.Z26` returned real 1-minute bars back to
+  mid-August 2026 (e.g. 2026-08-17) and was **empty by 2026-08-01**.
+- Historical (non-active) contracts return **zero bars** even for dates
+  inside their own front-month life: `CON.F.US.MES.H26` returned nothing
+  for 2026-02-25; `CON.F.US.MES.M26` returned nothing for 2026-04-02.
+
+Do **not** assume a wider retention window without testing it first. Any
+future pull for a date more than ~6–8 weeks old, or for a contract that is
+no longer the active lead month, must be validated with a **small probe
+pull** (one short `retrieveBars` window) **before** relying on it for a real
+backtest range. Empty `success: true` / `bars: []` is a retention miss, not
+a quiet pass.
+
+Historical gaps beyond this retention window require an **external** source
+(TradingView export or similar), not the API.
+
+If TradingView is used for a historical gap, the export must come from the
+**specific front-month contract that was active during that period**
+(e.g. MESM6 / MNQM6 for April 2026), **not** the continuous `ES!` / `NQ!`
+symbol. Continuous contracts are back-adjusted and can introduce a price
+offset versus contract-specific data — the same class of defect as the
+audit's **J4** finding (~62pt Feb 25 offset). Flag any
+continuous-contract-sourced file explicitly so it is never silently
+combined with contract-specific data without checking for an offset first.
