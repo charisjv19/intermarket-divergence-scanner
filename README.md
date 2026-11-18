@@ -69,23 +69,33 @@ python -m unittest discover -p 'test_*.py'
 
 The scanner reads 1-minute OHLC bar data (with pre-calculated swing markers from TradingView) for both MES and MNQ, then detects moments where the two instruments diverge structurally — one breaks a prior swing level while the other fails to confirm. This divergence suggests the confirming instrument's move was a false break (liquidity sweep), creating a potential reversal entry.
 
-### Signal Qualification (v8.7)
+### Signal Qualification (current: v8.8 and v8.10)
 
-A valid signal requires all of the following:
+A valid signal requires all of the following. Where the live versions differ, it says so.
 
-- **Intermarket divergence** — One instrument's sw2 wick-breaks a prior structural swing (sw1) while the other instrument's parallel sw2 fails to break its parallel sw1
-- **Parallel timestamp alignment** — sw1 and sw2 on both instruments must occur at matching timestamps (sw2 within the same minute; sw1 within 2-minute tolerance)
-- **Same-day enforcement** — sw1 must be from the same trading day as the signal
-- **sw2 staleness** — sw2 must be within the last 120 minutes (1m chart) or 36 bars (5m chart)
-- **15m macro bias alignment** — signal direction must agree with the combined ES+NQ structural bias on the 15-minute timeframe
-- **Fair Value Gap confluence** — a price imbalance must exist either after the divergence (FVG_AFTER_SMT) or as a pre-existing FVG that contains the sw2 confirmation-bar close (SMT_IN_FVG, v8.8)
+- **Intermarket divergence** — one instrument's sw2 wick-breaks a prior structural swing (sw1) while the other instrument's parallel sw2 fails to break its parallel sw1.
+- **Exact parallel timestamps** — sw2 and sw1 must sit on the same 1-minute bar on both instruments (v8.8 audit fix S3; v8.7 still allows sw1 within ±2 minutes).
+- **Same-session sw1** — the sw1 walk-back stays inside the signal's own session, not just the same calendar day (v8.8 audit fix S1).
+- **sw2 staleness** — sw2 must be within the last 120 minutes (1m chart) or 36 bars (5m chart).
+- **sw1 staleness (v8.10 only)** — the confirming instrument's sw1 may be at most 90 minutes older than its sw2. v8.5–v8.9 have no sw1 age limit: the v8.2 60-minute check stopped being applied in the v8.5 rewrite.
+- **Both confirm sides scored (v8.10 only)** — ES-confirm and NQ-confirm divergences are evaluated independently. v8.8 and earlier skip NQ-confirm whenever an ES-confirm SMT exists.
+- **15m macro bias alignment** — signal direction must agree with the combined ES+NQ structural bias on the 15-minute timeframe, read at the signal's confirmation time (v8.8+).
+- **5m SMT confluence (lenient)** — the signal is blocked only by an opposing 5m SMT, also read at the confirmation time.
+- **Fair Value Gap confluence** — either an FVG forms after the divergence (`FVG_AFTER_SMT`), or the sw2 confirmation-bar close sits inside a pre-existing FVG (`SMT_IN_FVG`). FVGs whose three bars span a session gap are rejected.
+- **Clean data** — ES and NQ are inner-joined by minute; a minute missing on either side is dropped from both, never filled.
+
+Each unique SMT fires once: signals are deduplicated by `(date, sw2_conf_time, direction, instrument)`.
 
 ### Entry Types
 
-| Type | Description |
-|------|-------------|
-| `FVG_AFTER_SMT` | FVG forms after the divergence. Limit entry at the 50% level of the gap. |
-| `SMT_IN_FVG` | sw2 confirmation-bar close (sw2 + 1 min) sits inside a pre-existing FVG. Market at confirmation-bar close. |
+Entry, stop and target are written to the output from v8.8 on (`entry_price`, `stop_loss`, `take_profit`, `target_R`). v8.7 never stored them; the backtesting toolkit rebuilds them from the documented formula.
+
+| Type | Entry | Stop | Target |
+|------|-------|------|--------|
+| `FVG_AFTER_SMT` | Limit at the 50% level of the FVG that forms after the divergence | Beyond the swing before the FVG (ES 2.0 / NQ 8.0 pt) | 3R |
+| `SMT_IN_FVG` | Market at the close of the bar right after sw2 (exactly sw2 + 1 min), which must be inside a pre-existing FVG | Just outside that FVG's edge (ES 1.0 / NQ 3.0 pt) | 1.5R |
+
+Minimum stop distance for both types: 20 ticks on ES (5.0 pt), 40 ticks on NQ (10.0 pt).
 
 ### Multi-Timeframe Integration
 
@@ -106,7 +116,7 @@ The scanner operates across three timeframes:
 v8.2 addressed two problems identified during manual review: the scanner was sometimes picking a later FVG when an earlier valid one existed, and sw1 could be arbitrarily far from sw2 in time, producing structurally meaningless comparisons.
 
 - **Earliest valid FVG**: Instead of returning the first FVG found in the lookahead scan, the scanner now evaluates all candidates and selects the one closest to the SMT confirmation point
-- **sw1 staleness limit**: sw1 must be within 60 minutes of sw2 on the 1m chart — prevents comparing structural points across sessions or extended ranging periods
+- **sw1 staleness limit**: sw1 must be within 60 minutes of sw2 on the 1m chart — prevents comparing structural points across sessions or extended ranging periods. (This check stopped being applied in the v8.5 rewrite; v8.10 brings back an sw1 limit at 90 minutes.)
 - **SMT_IN_FVG dedup priority**: When both entry types exist for the same divergence, SMT_IN_FVG (market entry) takes precedence over FVG_AFTER_SMT (limit entry)
 
 ### v8.3 — 15m Macro Bias Engine
@@ -170,6 +180,32 @@ v8.7 fixed two bugs discovered during manual review of Feb 25, 2026 signals:
 - **FVG search starts from sw2 confirmation bar**: Previously searched from the signal bar (delayed by caching/bucketing), missing FVGs that formed between sw2 confirmation and signal firing. Now starts immediately after sw2
 - **ES_FVG_MIN lowered to 0.5pt**: A 0.5pt FVG on Feb 25 would have been a 3R winner. Under review for potential overfit; may revert for out-of-sample testing
 
+### v8.8 — Audit Fixes + Confirmation-Clock Correctness (tagged OOS, live)
+
+v8.8 implements the September 2026 strategy audit (S1, S2, S3) and a set of correctness fixes found while building the backtesting toolkit. No detection thresholds were retuned. The file at the `v8.8` tag is frozen as the out-of-sample baseline.
+
+- **S1 — same-session sw1**: the walk-back for sw1 is limited to the signal's own session
+- **S3 — exact parallel sw1**: sw1 parallel tolerance 2 min → 0; both instruments' sw1 must be on the same bar
+- **S2 — entry/stop/target protocol**: market entry for `SMT_IN_FVG`, 50% limit for `FVG_AFTER_SMT`, stops and targets as in the Entry Types table, and a shared minimum stop
+- **Signal time is the confirmation bar**: `smt_time`, the 15m bias and the 5m SMT check are all read at the bar that confirms the setup, not at whichever later bar the scan loop happened to be on
+- **No session-gap artifacts**: an SMT_IN_FVG confirmation must be exactly 1 minute after sw2, and an FVG's three bars must be consecutive minutes — so a 14:29 bar can no longer pair with the next morning's 07:30 bar
+- **FVG_AFTER_SMT stop anchored at the FVG bar**: the swing used for the stop is the most recent one before the FVG formed
+- **ES/NQ inner-join**: a minute that exists on only one instrument is dropped from both before 5m/15m bars are built
+- **Pre-session FVGs count for SMT_IN_FVG**: a gap formed in 07:30–08:00 or 12:30–13:00 is valid pre-existing structure
+
+### v8.9 — Swing-Wick SMT_IN_FVG Membership (not run live)
+
+v8.9 changed one rule: `SMT_IN_FVG` fires when the confirming instrument's sw1 and/or sw2 **wick** sits inside a pre-existing FVG, instead of the confirmation-bar **close**. Everything else matches v8.8.
+
+**v8.9 is not run live, and this change is deliberately left out of all later versions.** v8.10 is built from the tagged v8.8 file, not from v8.9. `scanner_versions/smt_scanner_v8_9.py` is kept as a historical record only.
+
+### v8.10 — Dual-Confirm + sw1 Staleness (live)
+
+v8.10 is built on the tagged OOS v8.8 file and adds two rules, both prompted by live chart-vs-alert review:
+
+- **Dual-confirm**: v8.8 skips an NQ-confirm SMT whenever an ES-confirm SMT exists, which dropped a valid NQ-confirm / ES-fail setup on 2026-10-05 (09:14 sw1 / 09:24 sw2). v8.10 scores both sides independently; ES LONG and NQ LONG at the same sw2 are two separate signals
+- **90-minute sw1 staleness**: the confirming instrument's sw1 may be at most 90 minutes older than sw2 (`SW1_STALENESS_MINS = 90`). Prompted by the 2026-10-06 07:37 → 09:18 setup (101 minutes apart). Older failed parallels are dropped before the primary sw1 is chosen; if none remain, there is no SMT
+
 ### Confirmations Count
 
 When sw2 breaks multiple prior structural references that the other instrument fails to break, the `confirmations_count` field tracks how many independent structural breaks confirm the divergence. Higher counts indicate stronger setups.
@@ -229,7 +265,7 @@ This process has proven more effective than backtesting alone for catching speci
 - **December and January are historically poor months** for this strategy (confirmed across three years of observation)
 - **Macro alignment is a strong performance differentiator**: macro-aligned trades significantly outperform against-macro trades
 - **SMT misidentification is the primary loss driver**: measuring divergence on bodies instead of wicks, using non-structural points, or comparing non-parallel timestamps were the main sources of false signals
-- **Structural pullback filter was critical**: without minimum retracement between consecutive swings (ES ≥4pt, NQ ≥15pt), false signal rates were unacceptably high
+- **Structural pullback filter was critical** (v4–v8.4 era): without minimum retracement between consecutive swings (ES ≥4pt, NQ ≥15pt), false signal rates were unacceptably high. The v8.5 walk-back rewrite removed this check; the staleness windows handle recency instead
 
 ---
 
@@ -237,7 +273,7 @@ This process has proven more effective than backtesting alone for catching speci
 
 ### Trading Journal (v6)
 
-A self-contained HTML trading journal with:
+A self-contained HTML trading journal (kept outside this repo) with:
 - Signal CSV import with auto-populated fields (macro bias, 5m SMT, confirmations count, entry type)
 - Signal review workflow with status tracking (pending → reviewed → logged)
 - Trade history table with color-coded columns
@@ -247,11 +283,19 @@ A self-contained HTML trading journal with:
 
 ### Macro Bias Diagnostic
 
-Standalone Python script that classifies 15m structural bias per session. Reads 1m CSVs, resamples to 15m, runs swing detection, and outputs session-by-session bias classification to CSV.
+`tools/macro_bias_diagnostic.py` — standalone Python script that classifies 15m structural bias per session. Reads 1m CSVs, resamples to 15m, runs swing detection, and outputs session-by-session bias classification to CSV.
 
 ### Pine Script Indicator
 
-TradingView Pine Script v6 indicator that displays macro bias as colored chart backgrounds. A Bias Timeframe input switches the calculation between 5m and 15m. The chart must be that timeframe or a lower one that divides it evenly. Deep green = strong bullish, light green = bullish slowing, deep red = strong bearish, light red = bearish slowing, yellow = transitional.
+`tools/macro_bias_background.pine` — TradingView Pine Script v6 indicator that displays macro bias as colored chart backgrounds. A Bias Timeframe input switches the calculation between 5m and 15m. The chart must be that timeframe or a lower one that divides it evenly. Deep green = strong bullish, light green = bullish slowing, deep red = strong bearish, light red = bearish slowing, yellow = transitional.
+
+### Swing Marker Detection
+
+`tools/swing_marker_detection.py` (and the matching `.pine`) tags 4-bar Swing High / Swing Low markers on 1-minute bars — the same rule the scanners and `backtesting_toolkit/projectx_historical_pull.py` use. Run `python tools/swing_marker_detection.py <csv_path> [output_path]`.
+
+### Live Scanners and Backtesting Toolkit
+
+See `live_scanners/README.md` (Slack alerts from v8.7, v8.8 and v8.10) and `backtesting_toolkit/README.md` (fill simulator, P&L report, version comparison).
 
 ---
 
@@ -272,7 +316,7 @@ TradingView Pine Script v6 indicator that displays macro bias as colored chart b
 pip install -r requirements.txt
 ```
 
-Input: 1-minute OHLC bar CSV files with pre-calculated `Swing High`, `Swing Low`, and `EMA` columns, exported from TradingView using the Swing High/Low Marker indicator.
+Input: one 1-minute bar CSV per instrument (MES and MNQ) with columns `time, open, high, low, close, Swing High, Swing Low` — either a TradingView export using the Swing High/Low Marker indicator, or a pull from `backtesting_toolkit/projectx_historical_pull.py`.
 
 ---
 
