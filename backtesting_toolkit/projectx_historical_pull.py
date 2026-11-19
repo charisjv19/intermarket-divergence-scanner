@@ -36,6 +36,20 @@ Example (one ET calendar day, then compare against a known TV export):
 
 Date-only --start/--end are inclusive America/New_York calendar days.
 Pass full ISO datetimes to control the window exactly.
+
+1-second bars with volume (--unit second)
+-----------------------------------------
+Writes one CSV per ET calendar day, columns time, open, high, low, close,
+Volume (UTC timestamps, raw contract prices, no back-adjustment). Re-running
+the same command skips days already on disk, so a long pull can be stopped
+and restarted. Saturdays and the still-trading current day are skipped.
+
+  python -m backtesting_toolkit.projectx_historical_pull \\
+      --unit second --contract-id CON.F.US.MES.Z26 --symbol MES \\
+      --start 2026-10-01 --end 2026-11-18 --out-dir data_1s/MES
+
+Use the contract that was front month for the dates requested; run once per
+contract across a roll.
 """
 
 from __future__ import annotations
@@ -55,6 +69,7 @@ API_ROOT = os.environ.get("PROJECTX_BASE_URL", "https://api.topstepx.com/api").r
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 
+UNIT_SECOND = 1
 UNIT_MINUTE = 2
 UNIT_NUMBER_1M = 1
 LIVE_BARS = False  # live: True returns errors, not clean data
@@ -65,6 +80,10 @@ MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 
 OUTPUT_COLUMNS = ["time", "open", "high", "low", "close", "Swing High", "Swing Low"]
+
+# 1-second pulls (--unit second): raw OHLC + volume, one CSV per ET calendar day.
+SECONDS_COLUMNS = ["time", "open", "high", "low", "close", "Volume"]
+SECONDS_CHUNK_HOURS = 5  # 5h = 18,000 one-second bars, under BAR_LIMIT
 
 
 # ── credentials ───────────────────────────────────────────────────────────────
@@ -206,8 +225,13 @@ class ProjectXClient:
         end_time: datetime,
         *,
         limit: int = BAR_LIMIT,
+        unit: int = UNIT_MINUTE,
+        unit_number: int = UNIT_NUMBER_1M,
     ) -> list[dict[str, Any]]:
-        """Single /History/retrieveBars call (live scanner does a 4-hour window)."""
+        """Single /History/retrieveBars call (live scanner does a 4-hour window).
+
+        unit/unit_number default to 1-minute bars; pass unit=UNIT_SECOND for 1-second.
+        """
         if self.token is None:
             self.authenticate()
         payload = {
@@ -215,8 +239,8 @@ class ProjectXClient:
             "live": LIVE_BARS,
             "startTime": iso_z(start_time),
             "endTime": iso_z(end_time),
-            "unit": UNIT_MINUTE,
-            "unitNumber": UNIT_NUMBER_1M,
+            "unit": unit,
+            "unitNumber": unit_number,
             "limit": limit,
             "includePartialBar": False,
         }
@@ -332,6 +356,106 @@ def _backoff(attempt: int) -> None:
     time.sleep(min(1.0 * (2 ** attempt), 16.0))
 
 
+# ── 1-second pulls ────────────────────────────────────────────────────────────
+
+def fetch_seconds_window(
+    client: "ProjectXClient",
+    contract_id: str,
+    start: datetime,
+    end: datetime,
+    *,
+    min_window: timedelta = timedelta(minutes=10),
+) -> list[dict[str, Any]]:
+    """1-second bars for [start, end). If a response hits BAR_LIMIT it may be
+    truncated, so the window is split in half and each half fetched again."""
+    bars = client.fetch_bars(contract_id, start, end, unit=UNIT_SECOND, unit_number=1)
+    if len(bars) < BAR_LIMIT or (end - start) <= min_window:
+        if len(bars) >= BAR_LIMIT:
+            print(f"  WARNING: {iso_z(start)} → {iso_z(end)} still at bar limit", flush=True)
+        return bars
+    mid = start + (end - start) / 2
+    if client.chunk_pause_sec > 0:
+        time.sleep(client.chunk_pause_sec)
+    left = fetch_seconds_window(client, contract_id, start, mid, min_window=min_window)
+    if client.chunk_pause_sec > 0:
+        time.sleep(client.chunk_pause_sec)
+    right = fetch_seconds_window(client, contract_id, mid, end, min_window=min_window)
+    return left + right
+
+
+def seconds_bars_to_dataframe(bars: Iterable[dict[str, Any]]) -> pd.DataFrame:
+    """ProjectX bars -> time, open, high, low, close, Volume (sorted, deduped)."""
+    records = [
+        {"time": b.get("t"), "open": b.get("o"), "high": b.get("h"),
+         "low": b.get("l"), "close": b.get("c"), "Volume": b.get("v")}
+        for b in bars if b.get("t") is not None
+    ]
+    if not records:
+        return pd.DataFrame(columns=SECONDS_COLUMNS)
+    df = pd.DataFrame.from_records(records)
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    for col in ("open", "high", "low", "close", "Volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["time", "open", "high", "low", "close"])
+    df["Volume"] = df["Volume"].fillna(0).astype("int64")
+    df = df.drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
+    return df[SECONDS_COLUMNS]
+
+
+def pull_seconds_daily(
+    contract_id: str,
+    start_day: datetime,
+    end_day: datetime,
+    out_dir: str,
+    symbol: str,
+    *,
+    client: Optional["ProjectXClient"] = None,
+    chunk_hours: float = SECONDS_CHUNK_HOURS,
+    now: Optional[datetime] = None,
+) -> list[str]:
+    """Pull 1-second bars one ET calendar day at a time into
+    out_dir/{symbol}_1s_{YYYY-MM-DD}.csv.
+
+    Resumable: days whose file already exists are skipped, so an interrupted
+    run can simply be restarted. Saturdays (no session) and the current,
+    still-trading day are skipped. A day with no bars (holiday) still gets a
+    header-only file so it is not re-pulled.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    client = client or ProjectXClient()
+    client.authenticate()
+    now_utc = to_utc(now or datetime.now(tz=UTC))
+    written: list[str] = []
+    day = start_day.astimezone(ET).replace(hour=0, minute=0, second=0, microsecond=0)
+    last = end_day.astimezone(ET)
+    while day < last:
+        nxt = day + timedelta(days=1)
+        path = os.path.join(out_dir, f"{symbol}_1s_{day.date().isoformat()}.csv")
+        if day.weekday() == 5:
+            pass
+        elif to_utc(nxt) > now_utc:
+            print(f"{day.date()}  skipped: day not finished yet", flush=True)
+        elif os.path.exists(path):
+            print(f"{day.date()}  already pulled", flush=True)
+        else:
+            rows: list[dict[str, Any]] = []
+            for c0, c1 in iter_chunks(day, nxt, hours=chunk_hours):
+                rows.extend(fetch_seconds_window(client, contract_id, c0, c1))
+                if client.chunk_pause_sec > 0:
+                    time.sleep(client.chunk_pause_sec)
+            df = seconds_bars_to_dataframe(rows)
+            out = df.copy()
+            if not out.empty:
+                out["time"] = pd.to_datetime(out["time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            tmp = path + ".part"
+            out.to_csv(tmp, index=False)
+            os.replace(tmp, path)  # only a finished day ever gets the final name
+            written.append(path)
+            print(f"{day.date()}  {len(out):>6} bars  volume={int(df['Volume'].sum()) if len(df) else 0}  → {path}", flush=True)
+        day = nxt
+    return written
+
+
 # ── frame / CSV ───────────────────────────────────────────────────────────────
 
 def bars_to_dataframe(bars: Iterable[dict[str, Any]]) -> pd.DataFrame:
@@ -422,13 +546,20 @@ def fetch_bars(contract_id: str, start_time: datetime, end_time: datetime) -> li
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Pull ProjectX 1-min OHLC and write a scanner-format CSV."
+        description="Pull ProjectX 1-min OHLC (scanner-format CSV) or, with --unit second, "
+        "1-second OHLC + volume as one CSV per ET day."
     )
+    p.add_argument("--unit", choices=["minute", "second"], default="minute",
+                   help="minute (default): one scanner CSV via --out. "
+                        "second: one CSV per ET day into --out-dir (resumable).")
+    p.add_argument("--out-dir", default=None, help="Output folder for --unit second")
+    p.add_argument("--symbol", default=None, help="File prefix for --unit second, e.g. MES")
     p.add_argument("--contract-id", required=True, help="e.g. CON.F.US.MES.U26 (front month rolls)")
     p.add_argument("--start", required=True, help="YYYY-MM-DD or ISO datetime (ET if naive)")
     p.add_argument("--end", required=True, help="YYYY-MM-DD inclusive, or ISO datetime")
-    p.add_argument("--out", required=True, help="Output CSV path")
-    p.add_argument("--chunk-hours", type=float, default=CHUNK_HOURS)
+    p.add_argument("--out", default=None, help="Output CSV path (--unit minute)")
+    p.add_argument("--chunk-hours", type=float, default=None,
+                   help=f"Default {CHUNK_HOURS}h for minute, {SECONDS_CHUNK_HOURS}h for second")
     p.add_argument(
         "--username",
         default=None,
@@ -458,13 +589,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not user or not key:
             raise RuntimeError("Need both username and API key (flags or env).")
         client = ProjectXClient(username=user, api_key=key)
+    if args.unit == "second":
+        if not args.out_dir or not args.symbol:
+            raise SystemExit("--unit second needs --out-dir and --symbol")
+        pull_seconds_daily(
+            args.contract_id, start, end, args.out_dir, args.symbol,
+            client=client, chunk_hours=args.chunk_hours or SECONDS_CHUNK_HOURS,
+        )
+        return 0
+    if not args.out:
+        raise SystemExit("--unit minute needs --out")
     pull_historical(
         args.contract_id,
         start,
         end,
         args.out,
         client=client,
-        chunk_hours=args.chunk_hours,
+        chunk_hours=args.chunk_hours or CHUNK_HOURS,
     )
     return 0
 

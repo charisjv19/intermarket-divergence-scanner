@@ -223,3 +223,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 1-second bar pulls (projectx_historical_pull --unit second) — raw data, do not commit
+data_1s/
