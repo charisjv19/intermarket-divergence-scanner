@@ -418,8 +418,8 @@ def pull_seconds_daily(
 
     Resumable: days whose file already exists are skipped, so an interrupted
     run can simply be restarted. Saturdays (no session) and the current,
-    still-trading day are skipped. A day with no bars (holiday) still gets a
-    header-only file so it is not re-pulled.
+    still-trading day are skipped. A day that returns no bars writes no file
+    (it is reported and retried on the next run).
     """
     os.makedirs(out_dir, exist_ok=True)
     client = client or ProjectXClient()
@@ -444,6 +444,13 @@ def pull_seconds_daily(
                 if client.chunk_pause_sec > 0:
                     time.sleep(client.chunk_pause_sec)
             df = seconds_bars_to_dataframe(rows)
+            if df.empty:
+                # Never cache an empty day: it may be a holiday, but it may also be a
+                # wrong contract id or a date outside the API's 1-second history.
+                print(f"{day.date()}  WARNING: 0 bars returned, nothing written "
+                      f"(check contract id / history depth)", flush=True)
+                day = nxt
+                continue
             out = df.copy()
             if not out.empty:
                 out["time"] = pd.to_datetime(out["time"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")

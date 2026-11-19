@@ -99,5 +99,19 @@ class TestDailyPull(unittest.TestCase):
             self.assertEqual(os.listdir(d), [])
 
 
+class TestEmptyDay(unittest.TestCase):
+    def test_empty_day_writes_nothing(self):
+        class Empty(FakeClient):
+            def fetch_bars(self, *a, **k):
+                self.calls.append(a)
+                return []
+        c = Empty()
+        with tempfile.TemporaryDirectory() as d:
+            w = px.pull_seconds_daily("X", datetime(2026, 10, 1, tzinfo=ET), datetime(2026, 10, 2, tzinfo=ET),
+                                      d, "MES", client=c, now=datetime(2026, 11, 19, tzinfo=UTC))
+            self.assertEqual(w, [])
+            self.assertEqual(os.listdir(d), [])
+
+
 if __name__ == "__main__":
     unittest.main()
