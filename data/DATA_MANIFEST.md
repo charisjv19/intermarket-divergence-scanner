@@ -1,6 +1,6 @@
 # MES / MNQ 1-minute archive: consolidated data manifest
 
-Built 2026-11-18. Updated 2026-11-19: MNQ export 39 merged in; MES back-adjustment removed before 2026-03-16; MNQ confirmed unadjusted; Feb 27 last-hour bars added (see below). Replaces the per-symbol TradingView exports with one file per symbol.
+Built 2026-11-18. Updated 2026-11-19: TopstepX 1-second data and volume delta added; MNQ export 39 merged in; MES back-adjustment removed before 2026-03-16; MNQ confirmed unadjusted; Feb 27 last-hour bars added (see below). Replaces the per-symbol TradingView exports with one file per symbol.
 
 | File | Rows | Range (ET) |
 |---|---|---|
@@ -75,6 +75,37 @@ They differ from TradingView's exported flags on 19 MES bars and 34 MNQ bars, ou
 | May 17, 2026 (Sun) | 18:32 | End of data: first 33 minutes of the session only |
 
 Bars present in only one symbol: 46 MES-only minutes (2026-02-27 16:00–16:42, plus 2026-05-10 18:00 and 2026-05-12 20:31 and 22:32 ET, all outside sessions) and 4 MNQ-only minutes (thin overnight minutes in December, plus 2026-05-14 12:51 ET). MNQ export 39 filled the other 17 gaps from May 13–15 on 2026-11-19; the rest were **not filled**. Filling the gap changed one recomputed swing flag (2026-05-14 00:13 ET, now a swing low as well). The scanner joins MES and MNQ on time, so those minutes drop out of both.
+
+## 1-second data and volume delta (TopstepX, from Nov 2026)
+
+**Source:** TopstepX `retrieveBars` with 1-second bars (`projectx_historical_pull --unit second`), contract `.Z26`. Prices are raw contract prices (no back-adjustment). Each row is one second that traded (seconds with no trades have no row), with columns `time, open, high, low, close, Volume`, times in UTC.
+
+**History depth:** TopstepX keeps 1-second bars for a **rolling 14 days** (a pull on 2026-11-19 ~18:56 ET started at 2026-11-05 18:55 ET). From here on, data is collected weekly by `weekly_1s_to_repo.py` into the private historical-data repo. Anything older than 14 days at pull time is not recoverable from TopstepX.
+
+| File | Rows (seconds) | Range (ET) |
+|---|---|---|
+| `MES_1s_2026-11-05_2026-11-18.csv` | 608,605 | 2026-11-05 18:55:35 to 2026-11-18 23:59:59 |
+| `MNQ_1s_2026-11-05_2026-11-18.csv` | 748,568 | 2026-11-05 19:00:19 to 2026-11-18 23:59:59 |
+
+The first session (Nov 6) is partial: it is missing its first 55 minutes for MES and first 60 for MNQ. Nov 19 is partial (to midnight ET only).
+
+**Checks (2026-11-19):**
+- No duplicates, no impossible bars, all prices on the 0.25 tick grid, all volumes positive.
+- **Against TradingView 1-minute exports (Nov 8–19, 11,400 overlapping minutes per symbol):** 1-minute bars rebuilt from the seconds match TradingView exactly on 99.5–99.98% of minutes for each OHLC field (max difference 1.5 pts). Almost all differences are trades landing in the neighbouring minute; MNQ daily volumes match exactly.
+- **One real volume difference:** MES on Nov 17, 09:38–09:39 and 09:48–09:49 ET. TopstepX has 12,673 more contracts over those four minutes than TradingView. TradingView's values there are less than half of the neighbouring minutes, while TopstepX's are in line, so TradingView probably dropped trades. This is unconfirmed without a third source.
+
+**Volume delta** (`backtesting_toolkit/volume_delta.py`) turns the seconds into one row per minute: `open, high, low, close, Volume, Buy Vol, Sell Vol, Delta, Delta High, Delta Low, Active Secs`.
+- Each second's volume counts as buying if the second closed above its open, and selling if below. A flat second is compared with the previous second's close; if that's also unchanged, it keeps the previous side.
+- Delta = Buy Vol − Sell Vol. Delta High/Low are the extremes of the running delta within the minute.
+- This is an **estimate** from 1-second price direction, not true buyer/seller-initiated trade data.
+- Sanity checks: buy + sell = volume on every minute. Delta correlates with the minute's price change at 0.81 (MES) and 0.83 (MNQ) in NY hours. MES and MNQ delta correlate at 0.76.
+
+| File | Minutes | Range |
+|---|---|---|
+| `MES_1m_delta_2026-11-05_2026-11-18.csv` | 12,725 | as above |
+| `MNQ_1m_delta_2026-11-05_2026-11-18.csv` | 12,720 | as above |
+
+These are kept separate from the main 1-minute archive until the archive is extended past May 17, 2026. Delta exists only from Nov 5, 2026; earlier months have none.
 
 ## Known caveats
 
