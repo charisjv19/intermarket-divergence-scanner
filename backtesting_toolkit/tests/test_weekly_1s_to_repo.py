@@ -164,6 +164,41 @@ class TestRun(unittest.TestCase):
             self.assertTrue((repo / "data_1s" / "MES" / "MES_1s_2026-11-20.csv.gz").exists())
             self.assertEqual(calls[-1], ("push",))
 
+    def test_branch_delta_and_manifest(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            repo = git_repo(d)
+            (repo / "DATA_MANIFEST.md").write_text(
+                "# M\n\n## Change log\n\n| Date | Change | Files |\n|---|---|---|\n| 2026-11-19 | old | x |\n")
+            (repo / "delta_1m").mkdir()
+            (repo / "delta_1m" / "MES_1m_delta_2026-11-05_2026-11-18.csv.gz").write_bytes(b"old")
+            rows = wk.run(repo, days=2, symbols=["MES"], client=FakeClient(),
+                          now=datetime(2026, 11, 21, 15, tzinfo=UTC), git=fake_git(calls),
+                          branch="data/weekly-1s-2026-11-21", update_delta=True, update_manifest=True)
+            self.assertEqual(len(rows), 2)
+            self.assertIn(("checkout", "-b", "data/weekly-1s-2026-11-21"), calls)
+            self.assertEqual(calls[-1], ("push", "-u", "origin", "data/weekly-1s-2026-11-21"))
+            add = [c for c in calls if c[0] == "add"][0]
+            self.assertEqual(add, ("add", "data_1s", "delta_1m", "DATA_MANIFEST.md"))
+            deltas = sorted(p.name for p in (repo / "delta_1m").iterdir())
+            self.assertEqual(deltas, ["MES_1m_delta_2026-11-19_2026-11-20.csv.gz"])  # old file replaced
+            m = pd.read_csv(repo / "delta_1m" / deltas[0])
+            self.assertIn("Delta", m.columns)
+            text = (repo / "DATA_MANIFEST.md").read_text().splitlines()
+            i = text.index("|---|---|---|")
+            self.assertTrue(text[i + 1].startswith("| 2026-11-21 | Weekly 1s pull: MES 2 days"))
+            self.assertTrue(text[i + 2].startswith("| 2026-11-19 | old"))
+
+    def test_branch_removed_when_nothing_new(self):
+        calls = []
+        clean = lambda r, *a: calls.append(a) or ""
+        now = datetime(2026, 11, 21, 15, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as d:
+            repo = git_repo(d)
+            wk.run(repo, days=1, symbols=["MES"], client=FakeClient(), now=now, push=False)
+            wk.run(repo, days=1, symbols=["MES"], client=FakeClient(), now=now, git=clean, branch="b")
+            self.assertEqual(calls[-2:], [("checkout", "-"), ("branch", "-D", "b")])
+
     def test_requires_git_clone(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(SystemExit):

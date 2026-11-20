@@ -204,10 +204,72 @@ def pull_symbol(client, data_repo: Path, symbol: str, days: list[datetime], pull
     return rows
 
 
+def rebuild_delta(data_repo: Path, symbols: list[str]) -> list[Path]:
+    """Rebuild delta_1m/{SYM}_1m_delta_{first}_{last}.csv.gz from every daily file in
+    data_1s/{SYM}/, replacing the symbol's previous delta file."""
+    from backtesting_toolkit.volume_delta import minute_delta
+
+    written = []
+    for symbol in symbols:
+        files = sorted((data_repo / "data_1s" / symbol).glob(f"{symbol}_1s_*.csv.gz"))
+        if not files:
+            continue
+        first, last = files[0].name[-17:-7], files[-1].name[-17:-7]
+        df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+        m = minute_delta(df)
+        m["time"] = m["time"].dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        out_dir = data_repo / "delta_1m"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{symbol}_1m_delta_{first}_{last}.csv.gz"
+        for old in out_dir.glob(f"{symbol}_1m_delta_*.csv.gz"):
+            if old != out:
+                old.unlink()
+        tmp = out.with_suffix(out.suffix + ".part")
+        with gzip.open(tmp, "wt", newline="") as fh:
+            m.to_csv(fh, index=False)
+        os.replace(tmp, out)
+        written.append(out)
+        print(f"{symbol}: delta rebuilt, {len(m)} minutes -> {out.relative_to(data_repo)}", flush=True)
+    return written
+
+
+CHANGELOG_HEADER = "## Change log"
+
+
+def add_changelog_row(data_repo: Path, date: str, change: str, files: str) -> bool:
+    """Insert a row at the top of the DATA_MANIFEST.md change-log table."""
+    path = data_repo / "DATA_MANIFEST.md"
+    if not path.exists():
+        print("WARNING: DATA_MANIFEST.md not found; change log not updated", flush=True)
+        return False
+    lines = path.read_text().splitlines(keepends=True)
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == CHANGELOG_HEADER)
+        sep = next(i for i in range(start, len(lines)) if lines[i].startswith("|---"))
+    except StopIteration:
+        print("WARNING: change-log table not found in DATA_MANIFEST.md", flush=True)
+        return False
+    lines.insert(sep + 1, f"| {date} | {change} | {files} |\n")
+    path.write_text("".join(lines))
+    return True
+
+
+def summarize(log_rows: list[dict]) -> str:
+    parts = []
+    for symbol in sorted({r["symbol"] for r in log_rows}):
+        rows = [r for r in log_rows if r["symbol"] == symbol]
+        parts.append(f"{symbol} {len(rows)} days ({min(r['date'] for r in rows)} to {max(r['date'] for r in rows)}, "
+                     f"{sum(r['bars'] for r in rows):,} seconds)")
+    return "; ".join(parts)
+
+
 def run(
     data_repo: Path,
     *,
     import_dir: Optional[Path] = None,
+    branch: Optional[str] = None,
+    update_delta: bool = False,
+    update_manifest: bool = False,
     days: int = DEFAULT_DAYS,
     symbols: list[str] = SYMBOLS,
     push: bool = True,
@@ -220,6 +282,8 @@ def run(
         raise SystemExit(f"{data_repo} is not a git clone of the data repo")
     if push:
         git(data_repo, "pull", "--ff-only")
+        if branch:
+            git(data_repo, "checkout", "-b", branch)
     now = now or datetime.now(tz=UTC)
     client = client or px.ProjectXClient()
     client.authenticate()
@@ -237,6 +301,17 @@ def run(
     append_log(data_repo, log_rows)
     if not log_rows:
         print("Nothing new pulled.", flush=True)
+    else:
+        if update_delta:
+            rebuild_delta(data_repo, sorted({r["symbol"] for r in log_rows}))
+        if update_manifest:
+            add_changelog_row(
+                data_repo, now.astimezone(ET).date().isoformat(),
+                f"Weekly 1s pull: {summarize(log_rows)}" + ("; delta rebuilt" if update_delta else ""),
+                "`data_1s/`" + (", `delta_1m/`" if update_delta else ""),
+            )
+    tracked = ["data_1s"] + (["delta_1m"] if (data_repo / "delta_1m").exists() else []) \
+        + (["DATA_MANIFEST.md"] if (data_repo / "DATA_MANIFEST.md").exists() else [])
     if not push:
         print(f"Saved {len(log_rows)} new symbol-days (not committed: --no-push)", flush=True)
         if errors:
@@ -244,16 +319,26 @@ def run(
         return log_rows
     # Commit anything uncommitted under data_1s, including files saved by an
     # earlier --no-push run, so a dry run never blocks a later real one.
-    if git(data_repo, "status", "--porcelain", "data_1s").strip():
-        git(data_repo, "add", "data_1s")
+    if git(data_repo, "status", "--porcelain", *tracked).strip():
+        git(data_repo, "add", *tracked)
         if log_rows:
             span = f"{min(r['date'] for r in log_rows)} to {max(r['date'] for r in log_rows)}"
             msg = f"Weekly 1s pull: {len(log_rows)} new symbol-days ({span})"
         else:
             msg = "Weekly 1s pull: commit previously saved files"
         git(data_repo, "commit", "-m", msg)
-        git(data_repo, "push")
+        if branch:
+            git(data_repo, "push", "-u", "origin", branch)
+        else:
+            git(data_repo, "push")
         print(f"Committed and pushed: {msg}", flush=True)
+        print(f"RESULT: new_symbol_days={len(log_rows)} branch={branch or 'current'} pushed=yes "
+              f"summary=\"{summarize(log_rows)}\"", flush=True)
+    else:
+        if branch:
+            git(data_repo, "checkout", "-")
+            git(data_repo, "branch", "-D", branch)
+        print(f"RESULT: new_symbol_days=0 pushed=no", flush=True)
     if errors:
         raise RuntimeError("Some symbols failed (saved data was still committed): " + "; ".join(errors))
     return log_rows
@@ -265,13 +350,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--days", type=int, default=DEFAULT_DAYS, help="How many days back to check (max useful: 13)")
     p.add_argument("--symbols", nargs="+", default=SYMBOLS)
     p.add_argument("--no-push", action="store_true", help="Save files but don't git pull/commit/push")
+    p.add_argument("--branch", default=None,
+                   help="Commit to a new branch with this name and push it (for a pull request) "
+                        "instead of pushing to the current branch")
+    p.add_argument("--update-delta", action="store_true",
+                   help="Rebuild delta_1m/ from all of data_1s/ when new days were pulled")
+    p.add_argument("--update-manifest", action="store_true",
+                   help="Add a change-log row to DATA_MANIFEST.md when new days were pulled")
     p.add_argument("--import-from", default=None,
                    help="One-time: also import daily CSVs from a projectx_historical_pull --unit second "
                         "folder (e.g. data_1s) before pulling")
     args = p.parse_args(argv)
     load_env()
+    if not (os.environ.get("PROJECTX_USERNAME") or os.environ.get("PROJECT_X_USERNAME")
+            or os.environ.get("TOPSTEPX_USERNAME")) or not (
+            os.environ.get("PROJECTX_API_KEY") or os.environ.get("PROJECT_X_API_KEY")
+            or os.environ.get("TOPSTEPX_API_KEY")):
+        raise SystemExit("MISSING CREDENTIALS: PROJECTX_USERNAME / PROJECTX_API_KEY are not set "
+                         "(environment, Cursor secrets, or the scanner repo's .env). Nothing was pulled.")
     run(Path(args.data_repo), days=args.days, symbols=args.symbols, push=not args.no_push,
-        import_dir=Path(args.import_from) if args.import_from else None)
+        import_dir=Path(args.import_from) if args.import_from else None,
+        branch=args.branch, update_delta=args.update_delta, update_manifest=args.update_manifest)
     return 0
 
 
