@@ -19,7 +19,7 @@ Credentials: PROJECTX_USERNAME / PROJECTX_API_KEY from the environment or the
 scanner repo's .env (same file the live scanner uses).
 
   python3 -m backtesting_toolkit.weekly_1s_to_repo \\
-      --data-repo ~/intermarket-divergence-historical
+      --data-repo ~/intermarket-divergence-data
 
 Use --no-push to pull and save without committing (dry run); the next normal
 run commits those files. First run only: add --import-from data_1s to bring in
