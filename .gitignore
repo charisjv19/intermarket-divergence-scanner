@@ -206,6 +206,9 @@ tempCodeRunnerFile.py
 # Backtest OHLC cache (Piece 1) — pulled API data, do not commit
 backtesting_toolkit/cache/
 
+# Anonymous vendor samples (MES/MNQ). Not scanner contract tapes. Do not publish.
+data/historical/
+
 # Live scanner working state (bar snapshots + already-alerted identities)
 live_scanners/state/
 live_scanners/bars/
